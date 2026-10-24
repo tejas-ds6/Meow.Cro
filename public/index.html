@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8f4ec">
+  <meta name="description" content="Slow-made crochet pieces for a softer, more colorful everyday. Meet the little things made with a lot of love at Meow.Cro.">
+  <title>Meow.Cro — Little things, made with love</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="announcement">A little joy, wrapped up and on its way <span>✳</span> Free shipping on orders over ₹599</div>
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="Crochet home"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a>
+    <button class="menu-toggle" aria-label="Open menu" aria-expanded="false">☰</button>
+    <nav class="main-nav" aria-label="Main navigation">
+      <a class="active" href="index.html">Home</a><a href="shop.html">Shop</a><a href="story.html">Our story</a><a href="custom.html">Custom orders</a>
+    </nav>
+    <div class="header-actions">
+      <button class="icon-button search-toggle" aria-label="Search the shop" title="Search">⌕</button>
+      <a class="icon-button account-link" href="story.html#newsletter" aria-label="Our community" title="Our community">♡</a>
+      <button class="icon-button bag-button" aria-label="Open shopping bag" title="Shopping bag">♧<span class="bag-count">0</span></button>
+    </div>
+  </header>
+  <main>
+    <section class="hero">
+      <div class="hero-backdrop"></div>
+      <div class="hero-copy">
+        <p class="eyebrow">A little handmade happiness</p>
+        <h1>Little things,<br>made with <em>love.</em></h1>
+        <p class="hero-description">Thoughtfully crocheted pieces for your everyday adventures, cozy corners, and all the lovely in-between.</p>
+        <a class="button button-primary" href="shop.html">Find your little joy <span>→</span></a>
+        <div class="hero-note"><span>✳</span> SMALL BATCH · BIG HEART</div>
+      </div>
+      <div class="hero-art" data-parallax="0.13">
+        <img src="https://images.pexels.com/photos/30224898/pexels-photo-30224898/free-photo-of-handmade-crochet-bag-on-picnic-blanket.jpeg?auto=compress&amp;cs=tinysrgb&amp;w=1050" alt="A handmade crochet bag with delicate floral stitches on a picnic blanket">
+        <div class="hero-sticker"><span>made by<br>hand</span><b>♡</b></div>
+      </div>
+      <span class="floaty float-flower" aria-hidden="true">✿</span><span class="floaty float-spark" aria-hidden="true">✳</span><span class="floaty float-heart" aria-hidden="true">♡</span><span class="floaty float-thread" aria-hidden="true">〰</span>
+      
+      <div class="hero-ribbon">HANDMADE SLOWLY <span>✳</span> LOVED FOREVER <span>✳</span> MADE JUST FOR YOU <span>✳</span></div>
+    </section>
+
+    <section class="intro section-pad reveal">
+      <p class="eyebrow">Not made in a hurry. Made to be loved.</p>
+      <h2>For the days that call<br>for a little <em>extra lovely.</em></h2>
+      <p>Every loop, stitch, and tiny flower is made by hand in our little studio. Meet your new everyday favorites.</p>
+    </section>
+
+    <section class="featured section-pad">
+      <div class="section-heading reveal"><div><p class="eyebrow">The little things</p><h2>Made with <em>heart.</em></h2></div><a class="text-link" href="shop.html">Shop all handmade <span>→</span></a></div>
+      <div class="product-grid featured-grid" data-products="featured"></div>
+    </section>
+
+    <section class="story-band">
+      <div class="story-image reveal"><img src="https://images.pexels.com/photos/7585259/pexels-photo-7585259.jpeg?auto=compress&amp;cs=tinysrgb&amp;w=950" alt="A craftsperson carefully crocheting by hand" loading="lazy"></div>
+      <div class="story-copy reveal"><p class="eyebrow">A softer kind of making</p><h2>More than<br>just <em>crochet.</em></h2><p>We believe the best things take a little time. Our pieces are stitched slowly, in small batches, with yarn chosen to make the everyday feel special.</p><a class="button button-outline" href="story.html">A little about us <span>→</span></a><span class="story-doodle" aria-hidden="true">〰 ♡</span></div>
+    </section>
+
+    <section class="values section-pad">
+      <div class="value-item reveal"><span>✿</span><h3>Made by hand</h3><p>Every piece is one of a kind, made carefully stitch by stitch.</p></div>
+      <div class="value-item reveal"><span>❋</span><h3>Made to keep</h3><p>Lovely, long-lasting materials for all your everyday adventures.</p></div>
+      <div class="value-item reveal"><span>♡</span><h3>Made with love</h3><p>A little handmade happiness, from our hands to yours.</p></div>
+    </section>
+
+    <section class="newsletter section-pad reveal" id="newsletter"><p class="eyebrow">A tiny note from our studio</p><h2>Good things, <em>occasionally.</em></h2><p>New little things, studio notes, and the occasional bit of yarn gossip.</p><form class="newsletter-form"><label class="sr-only" for="newsletter-email">Email address</label><input id="newsletter-email" type="email" placeholder="Your email address" required><button class="button button-primary" type="submit">Count me in <span>→</span></button></form><small>Just the good stuff. Unsubscribe whenever.</small></section>
+  </main>
+  <footer class="site-footer"><a class="brand footer-brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a><p>Little things, made with a lot of love.</p><div class="footer-links"><a href="shop.html">Shop</a><a href="story.html">Our story</a><a href="custom.html">Custom orders</a></div><small>© 2026 Meow.Cro Studio. Made slowly, with love.</small></footer>
+  <div class="search-panel" aria-hidden="true"><form class="search-form"><label for="site-search">Looking for something lovely?</label><div><input id="site-search" type="search" placeholder="Try “flower” or “bag”"><button class="button button-primary" type="submit">Search →</button></div></form></div>
+  <div class="drawer-scrim"></div><aside class="cart-drawer" aria-label="Your shopping bag" aria-hidden="true"><div class="drawer-head"><div><p class="eyebrow">A little something</p><h2>Your bag <span class="drawer-count">(0)</span></h2></div><button class="drawer-close icon-button" aria-label="Close shopping bag">×</button></div><div class="cart-items"></div><div class="cart-empty"><span>✿</span><p>Your bag is having a little rest.</p><a class="text-link" href="shop.html">Find it something lovely →</a></div><div class="cart-bottom"><div class="cart-subtotal"><span>Subtotal</span><strong>₹0</strong></div><small>Shipping is figured out at checkout.</small><a class="button button-primary checkout-link" href="order.html">Head to checkout <span>→</span></a></div></aside>
+  <div class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <dialog class="product-dialog"><button class="dialog-close icon-button" aria-label="Close product details">×</button><div class="dialog-content"></div></dialog>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "meow.cro-crochet-site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^16.6.1",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.0.1",
+    "nodemailer": "^10.2.0",
+    "razorpay": "^2.9.8"
+  },
+  "description": "The site is served by a small Node.js backend. It sends newsletter signup requests, custom-order requests, and demo checkout orders to the studio email address using SMTP. SMTP credentials stay in the server's `.env` file and are never sent to the browser.",
+  "main": "server.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
