@@ -1,7 +1,6 @@
 import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import nodemailer from "nodemailer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,28 +8,11 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
-const smtpPort = Number(process.env.SMTP_PORT);
-const smtpConfigured = Boolean(
-  process.env.SMTP_HOST &&
-  Number.isInteger(smtpPort) &&
-  smtpPort > 0 &&
-  process.env.SMTP_USER &&
-  process.env.SMTP_PASS &&
-  process.env.SMTP_FROM &&
+const emailConfigured = Boolean(
+  process.env.RESEND_API_KEY &&
+  process.env.EMAIL_FROM &&
   process.env.MAIL_TO
 );
-
-const transporter = smtpConfigured
-  ? nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: smtpPort,
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      }
-    })
-  : null;
 
 const maxPhotoBytes = 5 * 1024 * 1024;
 const photoTypes = {
@@ -100,23 +82,50 @@ function validateFields(validator, res) {
 }
 
 async function sendStudioEmail(message, res) {
-  if (!transporter) {
+  if (!emailConfigured) {
     res.status(503).json({
-      error: "Email is not configured. Add your SMTP settings to the .env file and restart the server."
+      error: "Email is not configured. Set RESEND_API_KEY, EMAIL_FROM, and MAIL_TO in the server environment."
     });
     return;
   }
 
   try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM,
-      to: process.env.MAIL_TO,
-      ...message
-    });
+    await sendEmail({ to: process.env.MAIL_TO, ...message });
     res.json({ ok: true });
   } catch (error) {
-    console.error("SMTP delivery failed:", error);
+    console.error("Email delivery failed:", error);
     res.status(502).json({ error: "We couldn't send that email right now. Please try again shortly." });
+  }
+}
+
+async function sendEmail({ to, subject, text, replyTo, attachments }) {
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: process.env.EMAIL_FROM,
+      to,
+      subject,
+      text,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+      ...(attachments?.length
+        ? {
+            attachments: attachments.map(({ filename, content, contentType }) => ({
+              filename,
+              content: content.toString("base64"),
+              content_type: contentType
+            }))
+          }
+        : {})
+    })
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Resend API returned ${response.status}: ${details}`);
   }
 }
 
@@ -225,9 +234,9 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
   }, res);
   if (!values) return;
 
-  if (!transporter) {
+  if (!emailConfigured) {
     res.status(503).json({
-      error: "Email is not configured. Add your SMTP settings to the .env file and restart the server."
+      error: "Email is not configured. Set RESEND_API_KEY, EMAIL_FROM, and MAIL_TO in the server environment."
     });
     return;
   }
@@ -253,15 +262,13 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
   ].join("\n");
 
   try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM,
+    await sendEmail({
       to: process.env.MAIL_TO,
       replyTo: values.email,
       subject: `New Meow.Cro order ${values.number}`,
       text: orderDetails
     });
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM,
+    await sendEmail({
       to: values.email,
       subject: `Order confirmation ${values.number} — Meow.Cro`,
       text: [
@@ -285,7 +292,7 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
     });
     res.json({ ok: true });
   } catch (error) {
-    console.error("SMTP order email delivery failed:", error);
+    console.error("Order email delivery failed:", error);
     res.status(502).json({ error: "We couldn't send the order email right now. Please try again shortly." });
   }
 });
@@ -306,5 +313,7 @@ app.use((error, req, res, next) => {
 
 app.listen(port, () => {
   console.log(`Meow.Cro is running at http://localhost:${port}`);
-  if (!smtpConfigured) console.warn("SMTP is not configured; form submissions will return an error until .env is set.");
+  if (!emailConfigured) {
+    console.warn("Email is not configured; set RESEND_API_KEY, EMAIL_FROM, and MAIL_TO.");
+  }
 });
