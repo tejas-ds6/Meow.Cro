@@ -1,49 +1,27 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
-export const emailConfigurationMessage = "Email is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM, and MAIL_TO in the server environment.";
+export const emailConfigurationMessage = "Email is not configured. Set RESEND_API_KEY, SMTP_FROM to an address on a verified Resend domain, and MAIL_TO in the server environment.";
 
-export function createEmailService(configuration, createTransport = nodemailer.createTransport) {
-  const port = Number(configuration.SMTP_PORT);
+export function createEmailService(configuration, createResendClient = (apiKey) => new Resend(apiKey)) {
   const configured = Boolean(
-    configuration.SMTP_HOST &&
-    Number.isInteger(port) &&
-    port > 0 &&
-    port <= 65535 &&
-    configuration.SMTP_USER &&
-    configuration.SMTP_PASS &&
+    configuration.RESEND_API_KEY &&
     configuration.SMTP_FROM &&
     configuration.MAIL_TO
   );
-  const transport = configured
-    ? createTransport({
-        host: configuration.SMTP_HOST,
-        port,
-        secure: configuration.SMTP_SECURE?.toLowerCase() === "true",
-        auth: {
-          user: configuration.SMTP_USER,
-          pass: configuration.SMTP_PASS
-        }
-      })
-    : null;
+  const resend = configured ? createResendClient(configuration.RESEND_API_KEY) : null;
 
   return Object.freeze({
     configured,
     async send(message) {
-      if (!transport) throw new Error(emailConfigurationMessage);
-      const { attachments, ...messageDetails } = message;
-      return transport.sendMail({
-        ...messageDetails,
-        from: configuration.SMTP_FROM,
-        ...(attachments?.length
-          ? {
-              attachments: attachments.map(({ filename, content, contentType }) => ({
-                filename,
-                content,
-                contentType
-              }))
-            }
-          : {})
+      if (!resend) throw new Error(emailConfigurationMessage);
+
+      const { data, error } = await resend.emails.send({
+        ...message,
+        from: configuration.SMTP_FROM
       });
+      if (error) throw new Error(`Resend could not send the email: ${error.message}`);
+      if (!data?.id) throw new Error("Resend returned no email ID after sending.");
+      return data;
     }
   });
 }

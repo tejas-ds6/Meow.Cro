@@ -44,7 +44,7 @@ async function sendStudioEmail(message, res) {
     await emailService.send({ to: process.env.MAIL_TO, ...message });
     res.json({ ok: true });
   } catch (error) {
-    console.error("Email delivery failed:", error);
+    console.error("Resend email delivery failed:", error);
     res.status(502).json({ error: "We couldn't send that email right now. Please try again shortly." });
   }
 }
@@ -212,7 +212,7 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
     });
     res.json({ ok: true });
   } catch (error) {
-    console.error("Order email delivery failed:", error);
+    console.error("Resend order email delivery failed:", error);
     res.status(502).json({ error: "We couldn't send the order email right now. Please try again shortly." });
   }
 });
