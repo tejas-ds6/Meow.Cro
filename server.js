@@ -11,6 +11,7 @@ const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be a valid TCP port between 1 and 65535.");
 }
+app.set("trust proxy", 1);
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
 const emailService = createEmailService(process.env);
