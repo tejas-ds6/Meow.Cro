@@ -29,15 +29,38 @@ test("email service creates a Resend client from configuration and sends from th
     text: "Thanks!",
     attachments: [{ filename: "reference.jpg", content: Buffer.from([1, 2, 3]), contentType: "image/jpeg" }]
   });
-  assert.deepEqual(sentMessage, {
-    from: "studio@example.test",
-    to: "customer@example.test",
-    replyTo: "reply@example.test",
-    subject: "Hello",
-    text: "Thanks!",
-    attachments: [{ filename: "reference.jpg", content: Buffer.from([1, 2, 3]), contentType: "image/jpeg" }]
+  assert.equal(sentMessage.from, "studio@example.test");
+  assert.equal(sentMessage.to, "customer@example.test");
+  assert.equal(sentMessage.replyTo, "reply@example.test");
+  assert.equal(sentMessage.subject, "Hello");
+  assert.equal(sentMessage.text, "Thanks!");
+  assert.match(sentMessage.html, /cid:meow-cro-logo/);
+  assert.match(sentMessage.html, /Thanks!/);
+  assert.equal(sentMessage.attachments[0].filename, "meow-cro-logo.jpg");
+  assert.equal(sentMessage.attachments[0].contentType, "image/jpeg");
+  assert.equal(sentMessage.attachments[0].contentId, "meow-cro-logo");
+  assert.ok(sentMessage.attachments[0].content.length > 0);
+  assert.deepEqual(sentMessage.attachments[1], {
+    filename: "reference.jpg",
+    content: Buffer.from([1, 2, 3]),
+    contentType: "image/jpeg"
   });
   assert.deepEqual(result, { id: "email_123" });
+});
+
+test("branded email escapes untrusted message content", async () => {
+  let sentMessage;
+  const service = createEmailService(emailConfiguration, () => ({
+    emails: { send: async (message) => {
+      sentMessage = message;
+      return { data: { id: "email_456" }, error: null };
+    } }
+  }));
+
+  await service.send({ to: "customer@example.test", text: "<script>alert('x')</script>\nThanks!" });
+
+  assert.match(sentMessage.html, /&lt;script&gt;alert\(&#39;x&#39;\)&lt;\/script&gt;<br>Thanks!/);
+  assert.doesNotMatch(sentMessage.html, /<script>/);
 });
 
 test("email service reports missing Resend configuration instead of returning success", async () => {
