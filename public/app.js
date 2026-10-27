@@ -44,6 +44,30 @@ function showToast(message) {
   }, 2600);
 }
 
+function initializeEmailForm(selector, endpoint, successMessage, getValues = (form) => Object.fromEntries(new FormData(form).entries())) {
+  document.querySelector(selector)?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!form.reportValidity()) return;
+
+    const button = form.querySelector('[type="submit"]');
+    const originalButtonText = button.innerHTML;
+    button.disabled = true;
+    button.textContent = "Sending…";
+    try {
+      await postEmail(endpoint, getValues(form));
+      form.reset();
+      showToast(successMessage);
+    } catch (error) {
+      console.error(`Unable to submit ${selector}.`, error);
+      showToast(error.message);
+    } finally {
+      button.disabled = false;
+      button.innerHTML = originalButtonText;
+    }
+  });
+}
+
 async function postEmail(endpoint, values) {
   const response = await fetch(endpoint, {
     method: "POST",
@@ -313,7 +337,7 @@ function initializeCustomRequest() {
       sessionStorage.setItem("crosia-custom-request", JSON.stringify(values));
     } catch (error) {
       console.error("Unable to prepare your custom request.", error);
-      showToast("We couldn't prepare your request. Please try again or email hello@crosia.shop.");
+      showToast("We couldn't prepare your request. Please try again or email meowcrosia@gmail.com.");
       return;
     }
 
@@ -388,6 +412,14 @@ document.addEventListener("DOMContentLoaded", () => {
   initializeCustomRequest();
   initializeCustomRequestConfirmation();
   initializeSearch();
+  initializeEmailForm("#contact-form", "/api/contact", "Thanks for your note! The studio will get back to you.");
+  initializeEmailForm("#rating-form", "/api/reviews", "Thank you for sharing your star rating!");
+  initializeEmailForm(
+    ".newsletter-form",
+    "/api/newsletter",
+    "Thanks! Your signup request has been sent to the studio ♡",
+    (form) => ({ email: form.querySelector('input[type="email"]').value })
+  );
   observeReveals();
 
   document.addEventListener("click", (event) => {
@@ -430,28 +462,6 @@ document.addEventListener("DOMContentLoaded", () => {
     button.setAttribute("aria-label", open ? "Close menu" : "Open menu");
     document.querySelector(".main-nav")?.classList.toggle("nav-open", open);
   });
-  document.querySelector(".newsletter-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    if (!form.reportValidity()) return;
-    const input = form.querySelector('input[type="email"]');
-    const button = form.querySelector('[type="submit"]');
-    const originalButtonText = button.innerHTML;
-    button.disabled = true;
-    button.textContent = "Sending…";
-    try {
-      await postEmail("/api/newsletter", { email: input.value });
-      showToast("Thanks! Your signup request has been sent to the studio ♡");
-      form.reset();
-    } catch (error) {
-      console.error("Unable to email the newsletter signup.", error);
-      showToast(error.message);
-    } finally {
-      button.disabled = false;
-      button.innerHTML = originalButtonText;
-    }
-  });
-
   const parallax = document.querySelector("[data-parallax]");
   if (parallax && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     let scheduled = false;
