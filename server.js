@@ -1,43 +1,16 @@
 import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import nodemailer from "nodemailer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createEmailService, emailConfigurationMessage } from "./server/email-service.js";
+import { emailAddress, maxPhotoBytes, photoAttachment, text } from "./server/validation.js";
 
 const app = express();
 const port = 3000;
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
-const smtpPort = Number(process.env.SMTP_PORT);
-const emailConfigured = Boolean(
-  process.env.SMTP_HOST &&
-  Number.isInteger(smtpPort) &&
-  smtpPort > 0 &&
-  smtpPort <= 65535 &&
-  process.env.SMTP_USER &&
-  process.env.SMTP_PASS &&
-  process.env.SMTP_FROM &&
-  process.env.MAIL_TO
-);
-const mailTransport = emailConfigured
-  ? nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: smtpPort,
-      secure: process.env.SMTP_SECURE?.toLowerCase() === "true",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-      }
-    })
-  : null;
-
-const maxPhotoBytes = 5 * 1024 * 1024;
-const photoTypes = {
-  "image/jpeg": { extension: "jpg", matches: (buffer) => buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff },
-  "image/png": { extension: "png", matches: (buffer) => buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
-  "image/webp": { extension: "webp", matches: (buffer) => buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP" }
-};
+const emailService = createEmailService(process.env);
 
 app.use("/api", rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -46,49 +19,6 @@ app.use("/api", rateLimit({
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in a little while." }
 }));
-
-function text(value, label, { required = true, max = 2000 } = {}) {
-  if (typeof value !== "string") {
-    if (!required && (value === undefined || value === null || value === "")) return "";
-    throw new Error(`${label} is required.`);
-  }
-  const trimmed = value.trim();
-  if (required && !trimmed) throw new Error(`${label} is required.`);
-  if (trimmed.length > max) throw new Error(`${label} is too long.`);
-  return trimmed;
-}
-
-function emailAddress(value) {
-  const email = text(value, "Email address", { max: 254 });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("Enter a valid email address.");
-  }
-  return email;
-}
-
-function photoAttachment(value) {
-  const dataUrl = text(value, "Reference photo", {
-    required: false,
-    max: Math.ceil(maxPhotoBytes / 3) * 4 + 64
-  });
-  if (!dataUrl) return null;
-
-  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl);
-  if (!match) throw new Error("Upload a valid JPG, PNG, or WebP photo.");
-
-  const [, contentType, encoded] = match;
-  const content = Buffer.from(encoded, "base64");
-  if (content.length > maxPhotoBytes) throw new Error("Your photo must be 5 MB or smaller.");
-  if (content.toString("base64") !== encoded || !photoTypes[contentType].matches(content)) {
-    throw new Error("Upload a valid JPG, PNG, or WebP photo.");
-  }
-
-  return {
-    filename: `reference-photo.${photoTypes[contentType].extension}`,
-    content,
-    contentType
-  };
-}
 
 function validateFields(validator, res) {
   try {
@@ -100,39 +30,20 @@ function validateFields(validator, res) {
 }
 
 async function sendStudioEmail(message, res) {
-  if (!emailConfigured) {
+  if (!emailService.configured) {
     res.status(503).json({
-      error: "Email is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM, and MAIL_TO in the server environment."
+      error: emailConfigurationMessage
     });
     return;
   }
 
   try {
-    await sendEmail({ to: process.env.MAIL_TO, ...message });
+    await emailService.send({ to: process.env.MAIL_TO, ...message });
     res.json({ ok: true });
   } catch (error) {
     console.error("Email delivery failed:", error);
     res.status(502).json({ error: "We couldn't send that email right now. Please try again shortly." });
   }
-}
-
-async function sendEmail({ to, subject, text, replyTo, attachments }) {
-  await mailTransport.sendMail({
-    from: process.env.SMTP_FROM,
-    to,
-    subject,
-    text,
-    ...(replyTo ? { replyTo } : {}),
-    ...(attachments?.length
-      ? {
-          attachments: attachments.map(({ filename, content, contentType }) => ({
-            filename,
-            content,
-            contentType
-          }))
-        }
-      : {})
-  });
 }
 
 app.post("/api/newsletter", express.json({ limit: "32kb" }), async (req, res) => {
@@ -240,9 +151,9 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
   }, res);
   if (!values) return;
 
-  if (!emailConfigured) {
+  if (!emailService.configured) {
     res.status(503).json({
-      error: "Email is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM, and MAIL_TO in the server environment."
+      error: emailConfigurationMessage
     });
     return;
   }
@@ -268,13 +179,13 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
   ].join("\n");
 
   try {
-    await sendEmail({
+    await emailService.send({
       to: process.env.MAIL_TO,
       replyTo: values.email,
       subject: `New Meow.Cro order ${values.number}`,
       text: orderDetails
     });
-    await sendEmail({
+    await emailService.send({
       to: values.email,
       subject: `Order confirmation ${values.number} — Meow.Cro`,
       text: [
@@ -319,7 +230,7 @@ app.use((error, req, res, next) => {
 
 app.listen(port, "localhost", () => {
   console.log(`Meow.Cro is listening on port ${port}`);
-  if (!emailConfigured) {
-    console.warn("Email is not configured; set SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM, and MAIL_TO.");
+  if (!emailService.configured) {
+    console.warn(emailConfigurationMessage);
   }
 });

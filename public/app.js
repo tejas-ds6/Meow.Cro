@@ -1,43 +1,16 @@
-const products = [
-  { id: "daisy-bookmark", name: "Lazy Daisy Reader", category: "Accessories", price: 149, label: "A little favorite", color: "Buttercream", image: "./Images/book marker.png", alt: "A handmade crochet bookmarker with floral embroidery", featured: true },
-  { id: "flower-bouquet", name: "Pocketful of Posies", category: "Bouquet", price: 499, label: "Happiness, bundled", color: "Garden mix", image: "./Images/Flower Bouquet.jpeg", alt: "A colorful bouquet of crocheted flowers arranged in a vase", featured: true },
-  { id: "doll-pal", name: "Little Doll Pal", category: "dolls", price: 499, label: "A tiny best friend", color: "Blush pink with buttercream", image: "./Images/Crocheted Doll in Garden Bokeh.png", alt: "A handmade crocheted plush doll with orange accents", featured: true },
-  { id: "flower keychain", name: "Daisy flower", category: "keychain", price: 99, label: "One of a kind", color: "Sunset patchwork", image: "./Images/white flower keychain.jpeg", alt: "A colorful crochet daisy flower", featured: true },
-  { id: "tulip flower", name: "Tulip single flower", category: "Bouquet", price: 199, label: "Perfect for handmade Gift", color: "white", image: "./Images/tulip flower bouquet.jpeg", alt: "Crochet coasters beside a cozy cup of tea", featured: false },
-  { id: "tiny-cactus", name: "Little Window Cactus", category: "Home", price: 169, label: "A plant that stays", color: "Sage", image: "https://images.pexels.com/photos/15521699/pexels-photo-15521699/free-photo-of-a-crocheted-flower-in-a-pot.jpeg", alt: "A cheerful crocheted flower in a little pot", featured: false },
-  { id: "mushroom-pal", name: "Little Mushroom Pal (pack of 2)", category: "Plushies", price: 149, label: "Pocket-sized magic", color: "Tomato red", image: "https://images.pexels.com/photos/40233232/pexels-photo-40233232/free-photo-of-colorful-crochet-mushroom-decorations-hanging-display.jpeg", alt: "Colorful handmade crochet mushrooms", featured: false },
-  { id: "hearty-scrunchie", name: "Hearty Scrunchie", category: "Accessories", price: 149, label: "A little lift", color: "Buttercreamy Red", image: "./Images/Scrunchie.jpeg", alt: "A cheerful collection of handmade crochet scrunchies", featured: false },
-  { id: "Cutie bookmarker", name: "Cutie Bookmarkers (pack of 3)", category: "Accessories", price: 49, label: "For little treasures", color: "Multicolors", image: "./Images/cutie bookmarkers.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Strawberry keychain", name: "Berrybow ", category: "keychain", price: 99, label: "Cutie and playfull", color: "Blush pink", image: "./Images/strawberry keychain.jpeg", alt: "berry berry", featured: false },
-  { id: "Flower Belt", name: "Blossom Babe", category: "Accessories", price: 199, label: "Cutie and trendy", color: "Multicolors", image: "./Images/flower Belt.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "love Bouquet", name: "Forever Bloom", category: "Bouquet", price: 299, label: "Blush Heart Bloom", color: "babe pink", image: "./Images/love Bouquet.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Chicken", name: "Chickey ", category: "keychain", price: 169, label: "cutie chick", color: "yellow", image: "./Images/57a8e36140b521e75c241d75048cb09b.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "cherry", name: "Cozy Cherry", category: "keychain", price: 99, label: "Red Cherry", color: "Cherry Red", image: "./Images/689b66701cb8f27fed58a569fa30c11d.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "lily Bell", name: "Lily Bells", category: "keychain", price: 99, label: "Blush bells", color: "Rose Pink", image: "./Images/980adc50311429d7f9fa12a24418b05d.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Sunflower", name: "Shine Forever", category: "Bouquet", price: 199, label: "Love Towards You", color: "Golden Yellow", image: "./Images/IMG_20261021_104146.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "love", name: "Lovely Heart", category: "keychain", price: 99, label: "Heart Blooms", color: "Multicolors", image: "./Images/04832f24b7638ccb27da60b3c411ab87.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Rose", name: "Red Rose", category: "Bouquet", price: 299, label: "Loved by Everyone", color: "Ruby Red", image: "./Images/a5dc754f877cca1223d773fbbefa53f6.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Sunflower", name: "Sunflower Bookmark", category: "Accessories", price: 149, label: "Loved to everypage", color: "Golden Yellow", image: "./Images/c88e164ad749b4d8cf944c1272475684.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "bouquet", name: "Bouquet Keychain (Pack of 1)", category: "keychain", price: 149, label: "Memories Last Forever", color: "Multicolor", image: "./Images/cc372b61a1089cb558df65f4622d08d9.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Jelly keychain", name: "Jellybean Jr.", category: "keychain", price: 129, label: "Tiny Ocean Buddy", color: "Ocean blue", image: "./Images/d1777327326619c6db88d2de54cc7a22.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Party flowers", name: "Petal Pop Party ( pack of 1 set)", category: "Home", price: 99, label: "Bloom Squad", color: "Multicolor", image: "./Images/f598242354ded9935d0ec607a808a8b0.jpg.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Airpods", name: "AirPoddy in Love", category: "Accessories", price: 199, label: "Pocket Crush", color: "Cream Pinky", image: "./Images/file_00000000a45c82119e6b612c88285066.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Earbud", name: "Lovepod", category: "Accessories", price: 199, label: "Soft Little Love", color: "Green", image: "./Images/IMG_4215.JPG.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Sun keychain", name: "Sunbunni", category: "keychain", price: 149, label: "Sunshine Club", color: "Golden Yellow", image: "./Images/file_00000000f6548211bf79c98d55f47ae4.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Hut", name: "Love Hut pod", category: "Accessories", price: 199, label: "Fairycore Finds", color: "beach + orange", image: "./Images/IMG_4214.JPG.jpeg", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "chick swag", name: "Car Charm", category: "Home", price: 149, label: "Little Weirdos", color: "Yellow", image: "./Images/Crocheted Chick Car Charm.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Shades", name: "Shade Slay-er", category: "Accessories", price: 199, label: "Soft Armor", color: "pink shade", image: "./Images/Pink Crocheted Sunglasses Pouch.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "Bestie", name: "Bowzilla", category: "keychain", price: 149, label: "Coquette Chaos", color: "babe pink", image: "./Images/pink_bow_keychain_hd.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "lilly", name: "Lilypad Diva", category: "Bouquet", price: 299, label: "Petal Princess", color: "babe pink", image: "./Images/pink_crochet_lily_hd.png", alt: "A close-up of a carefully handmade crochet", featured: false },
-  { id: "tulip me", name: "Tulip Me Crazy", category: "keychain", price: 149, label: "Pocket Garden", color: "Mesmorize colors", image: "./Images/tulip_bouquet_keychain_hd.png", alt: "A close-up of a carefully handmade crochet", featured: false }
+import { getProduct, imageUrl, products } from "./catalog.js";
+import { createCartStore } from "./cart-store.js";
 
-];
-
-const imageUrl = (url, width = 720) => `${url}?auto=compress&cs=tinysrgb&w=${width}`;
 const formatPrice = (amount) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
-const cartStorageKey = "crosia-cart";
 const orderStorageKey = "crosia-last-order";
-const getProduct = (id) => products.find((product) => product.id === id);
+const browserStorage = {
+  getItem(key) {
+    return window.localStorage.getItem(key);
+  },
+  setItem(key, value) {
+    window.localStorage.setItem(key, value);
+  }
+};
 const readStorage = (key, fallback) => {
   try {
     const saved = localStorage.getItem(key);
@@ -48,28 +21,14 @@ const readStorage = (key, fallback) => {
   }
 };
 
-let cart = readStorage(cartStorageKey, []);
-if (!Array.isArray(cart)) cart = [];
-
-function saveCart() {
-  try {
-    localStorage.setItem(cartStorageKey, JSON.stringify(cart));
-  } catch (error) {
-    console.error("Unable to save your Crosia bag.", error);
-    showToast("Your bag couldn't be saved in this browser. Please keep this tab open.");
+const cartStore = createCartStore({
+  storage: browserStorage,
+  getProduct,
+  onStorageError(error, operation) {
+    console.error(`Unable to ${operation === "read" ? "read" : "save"} your Meow.Cro bag.`, error);
+    if (operation === "write") showToast("Your bag couldn't be saved in this browser. Please keep this tab open.");
   }
-}
-
-function cartQuantity() {
-  return cart.reduce((sum, item) => sum + (Number.isInteger(item.qty) && item.qty > 0 ? item.qty : 0), 0);
-}
-
-function cartTotal() {
-  return cart.reduce((sum, item) => {
-    const product = getProduct(item.id);
-    return sum + (product && Number.isInteger(item.qty) ? product.price * item.qty : 0);
-  }, 0);
-}
+});
 
 function showToast(message) {
   const region = document.querySelector(".toast-region");
@@ -145,20 +104,15 @@ function renderProducts(filter = "All", sort = "popular", search = "") {
 }
 
 function renderCart() {
-  const validItems = cart.filter((item) => getProduct(item.id) && Number.isInteger(item.qty) && item.qty > 0);
-  if (validItems.length !== cart.length) {
-    cart = validItems;
-    saveCart();
-  }
-  const count = cartQuantity();
+  const count = cartStore.quantity();
   document.querySelectorAll(".bag-count").forEach((element) => {
     element.textContent = count;
     element.classList.toggle("count-pop", count > 0);
   });
   document.querySelectorAll(".drawer-count").forEach((element) => element.textContent = `(${count})`);
-  document.querySelectorAll(".cart-subtotal strong").forEach((element) => element.textContent = formatPrice(cartTotal()));
+  document.querySelectorAll(".cart-subtotal strong").forEach((element) => element.textContent = formatPrice(cartStore.total()));
   document.querySelectorAll(".cart-items").forEach((container) => {
-    container.innerHTML = cart.map((item) => {
+    container.innerHTML = cartStore.items.map((item) => {
       const product = getProduct(item.id);
       if (!product) return "";
       return `<article class="cart-line"><img src="${imageUrl(product.image, 180)}" alt="" loading="lazy"><div class="cart-line-info"><h3>${product.name}</h3><span>${formatPrice(product.price)}</span><div class="quantity-control"><button type="button" data-qty="${product.id}" data-change="-1" aria-label="Remove one ${product.name}">−</button><span>${item.qty}</span><button type="button" data-qty="${product.id}" data-change="1" aria-label="Add one ${product.name}">+</button></div></div><button class="remove-item" type="button" data-remove="${product.id}" aria-label="Remove ${product.name} from your bag">×</button></article>`;
@@ -177,14 +131,14 @@ function renderCart() {
     document.body.append(floatingCheckout);
   }
   floatingCheckout.hidden = count === 0 || Boolean(document.querySelector("#checkout-form"));
-  floatingCheckout.textContent = `Checkout · ${count} ${count === 1 ? "item" : "items"} · ${formatPrice(cartTotal())} →`;
+  floatingCheckout.textContent = `Checkout · ${count} ${count === 1 ? "item" : "items"} · ${formatPrice(cartStore.total())} →`;
   renderCheckoutSummary();
 }
 
 function renderCheckoutSummary() {
   const target = document.querySelector(".checkout-items");
   if (!target) return;
-  if (!cartQuantity()) {
+  if (!cartStore.quantity()) {
     target.innerHTML = `<div class="checkout-empty"><span>✿</span><p>Your bag is taking a little nap.</p><a href="shop.html">Browse the little things →</a></div>`;
     document.querySelector(".place-order")?.setAttribute("disabled", "disabled");
     document.querySelector(".summary-subtotal").textContent = formatPrice(0);
@@ -192,11 +146,11 @@ function renderCheckoutSummary() {
     return;
   }
   document.querySelector(".place-order")?.removeAttribute("disabled");
-  target.innerHTML = cart.map((item) => {
+  target.innerHTML = cartStore.items.map((item) => {
     const product = getProduct(item.id);
     return `<div class="checkout-line"><div class="checkout-line-image"><img src="${imageUrl(product.image, 190)}" alt="" loading="lazy"><span>${item.qty}</span></div><div class="checkout-line-name"><strong>${product.name}</strong><small>${product.color}</small></div><strong>${formatPrice(product.price * item.qty)}</strong></div>`;
   }).join("");
-  const subtotal = cartTotal();
+  const subtotal = cartStore.total();
   const shipping = subtotal > 599 ? 0 : 29;
   document.querySelector(".summary-subtotal").textContent = formatPrice(subtotal);
   document.querySelector(".summary-shipping").textContent = shipping === 0 ? "On us ♡" : formatPrice(shipping);
@@ -204,10 +158,12 @@ function renderCheckoutSummary() {
 }
 
 function addToCart(id) {
-  const item = cart.find((entry) => entry.id === id);
-  if (item) item.qty += 1;
-  else cart.push({ id, qty: 1 });
-  saveCart();
+  const result = cartStore.add(id);
+  if (result === "limit") {
+    showToast("That little favorite is already at the maximum quantity.");
+    return;
+  }
+  if (result !== "added") return;
   renderCart();
   showToast(`${getProduct(id).name} is in your bag ♡`);
   document.querySelector(".bag-button")?.classList.add("bag-bump");
@@ -215,12 +171,7 @@ function addToCart(id) {
 }
 
 function changeQuantity(id, change) {
-  const item = cart.find((entry) => entry.id === id);
-  if (!item) return;
-  item.qty += change;
-  if (item.qty <= 0) cart = cart.filter((entry) => entry.id !== id);
-  saveCart();
-  renderCart();
+  if (cartStore.changeQuantity(id, change)) renderCart();
 }
 
 function openCart() {
@@ -268,7 +219,7 @@ function initializeShop() {
   const sort = document.querySelector("#sort-products");
   renderProducts(selectedFilter, sort?.value || "popular", search);
   if (search) {
-    document.querySelector(".shop-masthead h1").innerHTML = `A little search for <em>${search.replace(/[&<>"']/g, "")}.</em>`;
+    document.querySelector(".shop-masthead h1").textContent = `A little search for “${search}”.`;
     document.querySelector(".shop-masthead > div > p:last-child").textContent = `Here are the little things we found for “${search}”.`;
   }
   document.querySelectorAll(".filter-chip").forEach((button) => button.addEventListener("click", () => {
@@ -283,18 +234,18 @@ function initializeCheckout() {
   const form = document.querySelector("#checkout-form");
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!cartQuantity()) {
+    if (!cartStore.quantity()) {
       showToast("Your bag is empty. Find a little something first.");
       return;
     }
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form).entries());
-    const subtotal = cartTotal();
+    const subtotal = cartStore.total();
     const shipping = subtotal > 599 ? 0 : 29;
     const order = {
       ...values,
       number: `CR-${String(Date.now()).slice(-7)}`,
-      items: cart.map((item) => ({ id: item.id, qty: item.qty })),
+      items: cartStore.items.map((item) => ({ id: item.id, qty: item.qty })),
       subtotal,
       shipping,
       total: subtotal + shipping,
@@ -315,7 +266,7 @@ function initializeCheckout() {
     try {
       await postEmail("/api/orders", {
         ...order,
-        items: cart.map((item) => {
+        items: cartStore.items.map((item) => {
           const product = getProduct(item.id);
           return { name: product.name, qty: item.qty, unitPrice: product.price };
         })
@@ -329,11 +280,10 @@ function initializeCheckout() {
     }
 
     try {
-      localStorage.removeItem(cartStorageKey);
+      cartStore.clear();
     } catch (error) {
       console.error("Unable to clear your Crosia bag after sending the order.", error);
     }
-    cart = [];
     window.location.assign("confirmation.html");
   });
 }
@@ -459,9 +409,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     const remove = event.target.closest("[data-remove]");
     if (remove) {
-      cart = cart.filter((item) => item.id !== remove.dataset.remove);
-      saveCart();
-      renderCart();
+      if (cartStore.remove(remove.dataset.remove)) renderCart();
       return;
     }
     if (event.target.closest(".bag-button")) openCart();
