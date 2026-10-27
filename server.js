@@ -7,7 +7,10 @@ import { createEmailService, emailConfigurationMessage } from "./server/email-se
 import { emailAddress, maxPhotoBytes, photoAttachment, text } from "./server/validation.js";
 
 const app = express();
-const port = 3000;
+const port = Number(process.env.PORT || 3000);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("PORT must be a valid TCP port between 1 and 65535.");
+}
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
 const emailService = createEmailService(process.env);
@@ -228,7 +231,7 @@ app.use((error, req, res, next) => {
   return res.status(500).json({ error: "Something went wrong. Please try again." });
 });
 
-app.listen(port, "localhost", () => {
+app.listen(port, "0.0.0.0", () => {
   console.log(`Meow.Cro is listening on port ${port}`);
   if (!emailService.configured) {
     console.warn(emailConfigurationMessage);
