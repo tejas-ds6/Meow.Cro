@@ -413,7 +413,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initializeCustomRequestConfirmation();
   initializeSearch();
   initializeEmailForm("#contact-form", "/api/contact", "Thanks for your note! The studio will get back to you.");
-  initializeEmailForm("#rating-form", "/api/reviews", "Thank you for sharing your star rating!");
   initializeEmailForm(
     ".newsletter-form",
     "/api/newsletter",

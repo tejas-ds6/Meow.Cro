@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createEmailService, emailConfigurationMessage } from "../server/email-service.js";
-import { emailAddress, photoAttachment, starRating, text } from "../server/validation.js";
+import { emailAddress, photoAttachment, text } from "../server/validation.js";
 
 const emailConfiguration = {
   RESEND_API_KEY: "test-only-placeholder",
@@ -90,14 +90,6 @@ test("text and email validators trim values and reject invalid input", () => {
   assert.throws(() => text(" ", "Name"), /Name is required/);
   assert.throws(() => text("long", "Name", { max: 3 }), /Name is too long/);
   assert.throws(() => emailAddress("not-an-email"), /Enter a valid email address/);
-});
-
-test("star rating validator accepts only whole scores from one to five", () => {
-  assert.equal(starRating("5"), 5);
-  assert.equal(starRating(1), 1);
-  for (const value of ["0", "6", "2.5", "five", null]) {
-    assert.throws(() => starRating(value), /Choose a rating from 1 to 5 stars/);
-  }
 });
 
 test("photo validator checks data URL encoding and actual image signatures", () => {

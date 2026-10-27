@@ -4,7 +4,7 @@ import rateLimit from "express-rate-limit";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEmailService, emailConfigurationMessage } from "./server/email-service.js";
-import { emailAddress, photoAttachment, starRating, text } from "./server/validation.js";
+import { emailAddress, photoAttachment, text } from "./server/validation.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -121,18 +121,6 @@ app.post("/api/contact", express.json({ limit: "32kb" }), async (req, res) => {
     replyTo: values.email,
     subject: "New Meow.Cro contact message",
     text: [`Name: ${values.name}`, `Email: ${values.email}`, "", values.message].join("\n")
-  }, res);
-});
-
-app.post("/api/reviews", express.json({ limit: "32kb" }), async (req, res) => {
-  const values = validateFields(() => {
-    return { rating: starRating(req.body?.rating) };
-  }, res);
-  if (!values) return;
-
-  await sendStudioEmail({
-    subject: "New Meow.Cro star rating",
-    text: `A customer rated their Meow.Cro experience ${values.rating} out of 5 stars.`
   }, res);
 });
 

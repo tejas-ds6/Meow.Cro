@@ -25,14 +25,6 @@ export function emailAddress(value) {
   return email;
 }
 
-export function starRating(value) {
-  const score = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(score) || score < 1 || score > 5) {
-    throw new Error("Choose a rating from 1 to 5 stars.");
-  }
-  return score;
-}
-
 export function photoAttachment(value) {
   const dataUrl = text(value, "Reference photo", {
     required: false,
