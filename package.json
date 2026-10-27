@@ -10,13 +10,12 @@
     "node": ">=18"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
     "dotenv": "^16.6.1",
     "express": "^5.3.0",
     "express-rate-limit": "^8.0.1",
-    "razorpay": "^2.9.8"
+    "nodemailer": "^7.0.10"
   },
-  "description": "The site is served by a small Node.js backend. It sends newsletter signup requests, custom-order requests, and demo checkout orders to the studio email address using Resend's HTTPS API.",
+  "description": "The site is served by a small Node.js backend. It sends newsletter signup requests, custom-order requests, and demo checkout orders to the studio email address through SMTP.",
   "main": "server.js",
   "keywords": [],
   "author": "",
