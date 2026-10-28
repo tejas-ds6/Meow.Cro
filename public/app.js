@@ -313,6 +313,7 @@ function initializeCheckout() {
     }
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form).entries());
+    values.payment = form.querySelector('input[name="payment"]:checked')?.value;
     const subtotal = cartStore.total();
     const shipping = subtotal > 599 ? 0 : 29;
     const submitButton = form.querySelector('[type="submit"]');

@@ -137,6 +137,9 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
     if (!/^\d{6}$/.test(text(body.pin, "PIN code", { max: 6 }))) {
       throw new Error("Enter a valid 6-digit PIN code.");
     }
+    if (body.payment === "UPI") {
+      throw new Error("This checkout page is out of date. Refresh the page to start secure UPI payment.");
+    }
     if (body.payment !== "Cash on delivery") {
       throw new Error("Choose a valid payment method.");
     }
