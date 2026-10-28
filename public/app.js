@@ -73,17 +73,24 @@ async function postJson(endpoint, values) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify(values)
     });
   } catch {
     throw new Error("We couldn't reach the server. Check your connection and try again.");
   }
+  const responseType = response.headers.get("content-type") || "unknown content type";
+  let responseBody;
+  try {
+    responseBody = await response.text();
+  } catch {
+    throw new Error(`Couldn't read the server response (HTTP ${response.status}). Please retry.`);
+  }
   let result;
   try {
-    result = await response.json();
+    result = JSON.parse(responseBody);
   } catch {
-    throw new Error("The server returned an invalid response. Check that the Node server is running.");
+    throw new Error(`The server returned a non-JSON response (HTTP ${response.status}, ${responseType}). Restart or redeploy the updated Node server, then reload checkout.`);
   }
   if (!response.ok) throw new Error(result.error || "We couldn't complete that just now. Please try again.");
   return result;
