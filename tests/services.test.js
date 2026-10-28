@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { createEmailService, emailConfigurationMessage } from "../server/email-service.js";
+import { createRazorpayService } from "../server/payment-service.js";
 import { emailAddress, photoAttachment, text } from "../server/validation.js";
 
 const emailConfiguration = {
@@ -102,4 +104,110 @@ test("photo validator checks data URL encoding and actual image signatures", () 
   assert.equal(photoAttachment(""), null);
   assert.throws(() => photoAttachment("data:image/jpeg;base64,SGVsbG8="), /valid JPG, PNG, or WebP/);
   assert.throws(() => photoAttachment("data:image/gif;base64,R0lGODlh"), /valid JPG, PNG, or WebP/);
+});
+
+test("Razorpay service creates an order with the server-calculated INR amount", async () => {
+  let createdOrder;
+  const service = createRazorpayService({
+    RAZORPAY_KEY_ID: "key_test",
+    RAZORPAY_KEY_SECRET: "secret_test"
+  }, () => ({
+    orders: { create: async (order) => {
+      createdOrder = order;
+      return { id: "order_test_123", amount: 67800, currency: "INR" };
+    } },
+    payments: { fetch: async () => { throw new Error("not used"); } }
+  }));
+  const order = { number: "MC-TEST-123", total: 678 };
+
+  const result = await service.createOrder(order);
+
+  assert.equal(createdOrder.amount, 67800);
+  assert.equal(createdOrder.currency, "INR");
+  assert.equal(createdOrder.receipt, order.number);
+  assert.equal(result.keyId, "key_test");
+  assert.equal(result.orderId, "order_test_123");
+  assert.equal(result.amount, 67800);
+  assert.ok(result.verificationToken);
+});
+
+test("Razorpay service accepts only a valid signature and a captured matching payment", async () => {
+  const secret = "secret_test";
+  let fetchedPaymentId;
+  const service = createRazorpayService({
+    RAZORPAY_KEY_ID: "key_test",
+    RAZORPAY_KEY_SECRET: secret
+  }, () => ({
+    orders: { create: async () => ({ id: "order_test_123", amount: 67800, currency: "INR" }) },
+    payments: { fetch: async (paymentId) => {
+      fetchedPaymentId = paymentId;
+      return {
+        id: paymentId,
+        order_id: "order_test_123",
+        amount: 67800,
+        currency: "INR",
+        status: "captured"
+      };
+    } }
+  }));
+  const details = await service.createOrder({
+    number: "MC-TEST-123",
+    total: 678,
+    payment: "UPI",
+    name: "Test buyer"
+  });
+  const paymentId = "pay_test_456";
+  const signature = createHmac("sha256", secret)
+    .update(`order_test_123|${paymentId}`)
+    .digest("hex");
+
+  const verified = await service.verifyPayment({
+    orderId: "order_test_123",
+    paymentId,
+    signature,
+    verificationToken: details.verificationToken
+  });
+
+  assert.equal(fetchedPaymentId, paymentId);
+  assert.equal(verified.payment, "UPI (paid)");
+  assert.equal(verified.paymentId, paymentId);
+  assert.equal(verified.name, "Test buyer");
+});
+
+test("Razorpay service rejects altered signatures, wrong amounts, wrong orders, and uncaptured payments", async () => {
+  const secret = "secret_test";
+  let payment = {
+    order_id: "order_test_123",
+    amount: 67800,
+    currency: "INR",
+    status: "captured"
+  };
+  const service = createRazorpayService({
+    RAZORPAY_KEY_ID: "key_test",
+    RAZORPAY_KEY_SECRET: secret
+  }, () => ({
+    orders: { create: async () => ({ id: "order_test_123", amount: 67800, currency: "INR" }) },
+    payments: { fetch: async () => payment }
+  }));
+  const details = await service.createOrder({ number: "MC-TEST-123", total: 678 });
+  const paymentId = "pay_test_456";
+  const signature = createHmac("sha256", secret)
+    .update(`order_test_123|${paymentId}`)
+    .digest("hex");
+  const verify = (changes = {}) => service.verifyPayment({
+    orderId: "order_test_123",
+    paymentId,
+    signature,
+    verificationToken: details.verificationToken,
+    ...changes
+  });
+
+  await assert.rejects(verify({ signature: "invalid" }), /could not verify/);
+  await assert.rejects(verify({ orderId: "order_other" }), /do not match/);
+  payment = { ...payment, amount: 100 };
+  await assert.rejects(verify(), /has not been captured/);
+  payment = { ...payment, amount: 67800, order_id: "order_other" };
+  await assert.rejects(verify(), /has not been captured/);
+  payment = { ...payment, order_id: "order_test_123", status: "authorized" };
+  await assert.rejects(verify(), /has not been captured/);
 });

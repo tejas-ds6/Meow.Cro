@@ -68,20 +68,38 @@ function initializeEmailForm(selector, endpoint, successMessage, getValues = (fo
   });
 }
 
-async function postEmail(endpoint, values) {
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values)
-  });
+async function postJson(endpoint, values) {
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values)
+    });
+  } catch {
+    throw new Error("We couldn't reach the server. Check your connection and try again.");
+  }
   let result;
   try {
     result = await response.json();
   } catch {
-    throw new Error("The email service returned an invalid response. Check that the Node server is running.");
+    throw new Error("The server returned an invalid response. Check that the Node server is running.");
   }
-  if (!response.ok) throw new Error(result.error || "We couldn't send that just now. Please try again.");
+  if (!response.ok) throw new Error(result.error || "We couldn't complete that just now. Please try again.");
   return result;
+}
+
+const postEmail = postJson;
+
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Razorpay Checkout couldn't load. Check your connection and try again."));
+    document.head.append(script);
+  });
 }
 
 function renderProductCard(product, index) {
@@ -222,10 +240,29 @@ function showProduct(id) {
   dialog.showModal();
 }
 
-function renderConfirmation() {
+async function renderConfirmation() {
   const card = document.querySelector(".confirmation-card");
   if (!card?.querySelector(".order-number")) return;
-  const order = readStorage(orderStorageKey, null);
+  let order = readStorage(orderStorageKey, null);
+  if (order?.payment === "UPI (paid)") {
+    if (!order.paymentProof) {
+      showUnverifiedConfirmation(card);
+      return;
+    }
+    try {
+      const verified = await postJson("/api/payments/razorpay/confirm", order.paymentProof);
+      order = { ...verified.order, notificationSent: order.notificationSent };
+      try {
+        localStorage.setItem(orderStorageKey, JSON.stringify(order));
+      } catch (error) {
+        console.error("Unable to update the verified Meow.Cro order in browser storage.", error);
+      }
+    } catch (error) {
+      console.error("Unable to confirm the Razorpay payment.", error);
+      showUnverifiedConfirmation(card);
+      return;
+    }
+  }
   if (!order) {
     card.innerHTML = `<div class="confirmation-flower">✿</div><p class="eyebrow">A little mix-up</p><h1>No order <em>just yet.</em></h1><p class="confirmation-lede">We couldn't find an order in this browser. Your bag is still here if you'd like to pick up where you left off.</p><a class="button button-primary" href="shop.html">Visit the little shop <span>→</span></a>`;
     return;
@@ -235,6 +272,18 @@ function renderConfirmation() {
   card.querySelector(".confirmation-address").textContent = `${order.address}, ${order.city} ${order.pin}`;
   card.querySelector(".confirmation-payment").textContent = order.payment;
   card.querySelector(".confirmation-total").textContent = formatPrice(order.total);
+  const note = card.querySelector(".confirmation-note");
+  if (order.payment === "UPI (paid)") {
+    note.textContent = order.notificationSent === false
+      ? "Your payment is confirmed. We couldn't send the order email just now, but your order number is saved above."
+      : "Your payment has been received and verified by Razorpay.";
+  } else {
+    note.textContent = "Payment is due when your Cash on delivery parcel arrives. The studio will follow up to confirm your order.";
+  }
+}
+
+function showUnverifiedConfirmation(card) {
+  card.innerHTML = `<div class="confirmation-flower">✿</div><p class="eyebrow">Payment check</p><h1>We couldn't confirm <em>just yet.</em></h1><p class="confirmation-lede">This page only confirms UPI orders after Razorpay reports a captured payment. Please refresh to check again. If your UPI app shows a debit, don't pay again—contact us with your payment reference.</p><a class="button button-primary" href="contact.html">Contact the studio <span>→</span></a>`;
 }
 
 function initializeShop() {
@@ -266,6 +315,87 @@ function initializeCheckout() {
     const values = Object.fromEntries(new FormData(form).entries());
     const subtotal = cartStore.total();
     const shipping = subtotal > 599 ? 0 : 29;
+    const submitButton = form.querySelector('[type="submit"]');
+    const originalButtonText = submitButton.innerHTML;
+
+    if (values.payment === "UPI") {
+      submitButton.disabled = true;
+      submitButton.textContent = "Opening secure payment…";
+      let paymentCallbackReceived = false;
+      let paymentReference = "";
+      try {
+        const paymentOrder = await postJson("/api/payments/razorpay/orders", {
+          ...values,
+          items: cartStore.items.map(({ id, qty }) => ({ id, qty }))
+        });
+        await loadRazorpayCheckout();
+        const paymentResult = await new Promise((resolve, reject) => {
+          const checkout = new window.Razorpay({
+            key: paymentOrder.keyId,
+            amount: paymentOrder.amount,
+            currency: paymentOrder.currency,
+            name: "Meow.Cro",
+            description: "Handmade crochet order",
+            order_id: paymentOrder.orderId,
+            prefill: { name: values.name, email: values.email, contact: values.phone },
+            method: { upi: true, card: false, netbanking: false, wallet: false, emi: false, paylater: false },
+            theme: { color: "#b85f48" },
+            handler: async (details) => {
+              paymentCallbackReceived = true;
+              paymentReference = details.razorpay_payment_id || "";
+              try {
+                const verified = await postJson("/api/payments/razorpay/verify", {
+                  ...details,
+                  verificationToken: paymentOrder.verificationToken
+                });
+                resolve({ verified, details });
+              } catch (error) {
+                reject(error);
+              }
+            },
+            modal: { ondismiss: () => reject(new Error("Payment was not confirmed. Your bag is still here.")) }
+          });
+          checkout.on("payment.failed", (result) => {
+            reject(new Error(result.error?.description || "Payment wasn't completed. Your bag is still here."));
+          });
+          checkout.open();
+        });
+        const order = {
+          ...paymentResult.verified.order,
+          notificationSent: paymentResult.verified.notificationSent,
+          paymentProof: {
+            razorpay_order_id: paymentResult.details.razorpay_order_id,
+            razorpay_payment_id: paymentResult.details.razorpay_payment_id,
+            razorpay_signature: paymentResult.details.razorpay_signature,
+            verificationToken: paymentOrder.verificationToken
+          }
+        };
+        try {
+          localStorage.setItem(orderStorageKey, JSON.stringify(order));
+        } catch (error) {
+          console.error("Unable to save the verified Meow.Cro order.", error);
+          showToast("Payment received, but this browser couldn't save your receipt. Please contact the studio with your payment reference.");
+          submitButton.disabled = false;
+          submitButton.innerHTML = originalButtonText;
+          return;
+        }
+        try {
+          cartStore.clear();
+        } catch (error) {
+          console.error("Unable to clear your bag after confirmed payment.", error);
+        }
+        window.location.assign("confirmation.html");
+      } catch (error) {
+        console.error("Unable to complete Razorpay checkout.", error);
+        showToast(paymentCallbackReceived
+          ? `We couldn't verify payment${paymentReference ? ` ${paymentReference}` : ""}. If your UPI app shows a debit, don't pay again—contact the studio.`
+          : error.message);
+        submitButton.disabled = false;
+        submitButton.innerHTML = originalButtonText;
+      }
+      return;
+    }
+
     const order = {
       ...values,
       number: `CR-${String(Date.now()).slice(-7)}`,
@@ -275,8 +405,6 @@ function initializeCheckout() {
       total: subtotal + shipping,
       placedAt: new Date().toISOString()
     };
-    const submitButton = form.querySelector('[type="submit"]');
-    const originalButtonText = submitButton.innerHTML;
     try {
       localStorage.setItem(orderStorageKey, JSON.stringify(order));
     } catch (error) {

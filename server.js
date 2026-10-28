@@ -4,6 +4,8 @@ import rateLimit from "express-rate-limit";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEmailService, emailConfigurationMessage } from "./server/email-service.js";
+import { products } from "./public/catalog.js";
+import { createOrderNumber, createRazorpayService, PaymentVerificationError } from "./server/payment-service.js";
 import { emailAddress, photoAttachment, text } from "./server/validation.js";
 
 const app = express();
@@ -15,6 +17,8 @@ app.set("trust proxy", 1);
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
 const emailService = createEmailService(process.env);
+const paymentService = createRazorpayService(process.env);
+const productsById = new Map(products.map((product) => [product.id, product]));
 
 app.use("/api", rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -133,7 +137,7 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
     if (!/^\d{6}$/.test(text(body.pin, "PIN code", { max: 6 }))) {
       throw new Error("Enter a valid 6-digit PIN code.");
     }
-    if (!["Cash on delivery", "UPI"].includes(body.payment)) {
+    if (body.payment !== "Cash on delivery") {
       throw new Error("Choose a valid payment method.");
     }
     const number = text(body.number, "Order number", { max: 40 });
@@ -236,6 +240,156 @@ app.post("/api/orders", express.json({ limit: "32kb" }), async (req, res) => {
   }
 });
 
+app.post("/api/payments/razorpay/orders", express.json({ limit: "32kb" }), async (req, res) => {
+  const values = validateFields(() => {
+    const body = req.body || {};
+    if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > 30) {
+      throw new Error("Your bag doesn't contain valid items.");
+    }
+
+    const items = body.items.map((item) => {
+      const id = text(item?.id, "Product", { max: 120 });
+      const product = productsById.get(id);
+      if (!product) throw new Error("A product in your bag is no longer available.");
+      const qty = Number(item.qty);
+      if (!Number.isInteger(qty) || qty < 1 || qty > 99) throw new Error("A product quantity is invalid.");
+      return { id, name: product.name, qty, unitPrice: product.price };
+    });
+    const subtotal = items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
+    const shipping = subtotal > 599 ? 0 : 29;
+    const phone = text(body.phone, "Phone number", { max: 30 });
+    if (!/^[0-9+()\-\s]{7,30}$/.test(phone)) throw new Error("Enter a valid phone number.");
+    const pin = text(body.pin, "PIN code", { max: 6 });
+    if (!/^\d{6}$/.test(pin)) throw new Error("Enter a valid 6-digit PIN code.");
+    return {
+      name: text(body.name, "Name", { max: 120 }),
+      email: emailAddress(body.email),
+      phone,
+      address: text(body.address, "Street address", { max: 300 }),
+      city: text(body.city, "City", { max: 100 }),
+      pin,
+      note: text(body.note, "Note", { required: false, max: 1000 }),
+      payment: "UPI",
+      number: createOrderNumber(),
+      items,
+      subtotal,
+      shipping,
+      total: subtotal + shipping
+    };
+  }, res);
+  if (!values) return;
+  if (!paymentService.configured) {
+    res.status(503).json({ error: "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to the server environment." });
+    return;
+  }
+
+  try {
+    res.json(await paymentService.createOrder(values));
+  } catch (error) {
+    console.error("Razorpay order creation failed:", error);
+    res.status(502).json({ error: "We couldn't start your UPI payment. Please try again shortly." });
+  }
+});
+
+async function sendPaidOrderEmails(order) {
+  if (!emailService.configured) {
+    console.warn("Razorpay payment was captured, but order email could not be sent:", emailConfigurationMessage);
+    return false;
+  }
+
+  const items = order.items.map((item) => `- ${item.name} x ${item.qty} — ₹${item.unitPrice * item.qty}`);
+  const orderDetails = [
+    `Order: ${order.number}`,
+    `Name: ${order.name}`,
+    `Email: ${order.email}`,
+    `Phone: ${order.phone}`,
+    `Address: ${order.address}, ${order.city} ${order.pin}`,
+    "Payment: UPI — captured by Razorpay",
+    `Razorpay payment ID: ${order.paymentId}`,
+    "",
+    "Items:",
+    ...items,
+    "",
+    `Subtotal: ₹${order.subtotal}`,
+    `Shipping: ${order.shipping ? `₹${order.shipping}` : "Free"}`,
+    `Paid total: ₹${order.total}`,
+    `Note: ${order.note || "None"}`
+  ].join("\n");
+
+  try {
+    await emailService.send({
+      to: process.env.MAIL_TO,
+      replyTo: order.email,
+      subject: `Paid Meow.Cro order ${order.number}`,
+      text: orderDetails
+    });
+    await emailService.send({
+      to: order.email,
+      subject: `Payment received for order ${order.number} — Meow.Cro`,
+      text: [
+        `Hi ${order.name},`,
+        "",
+        `Your UPI payment for order ${order.number} has been received.`,
+        "",
+        ...items,
+        "",
+        `Subtotal: ₹${order.subtotal}`,
+        `Shipping: ${order.shipping ? `₹${order.shipping}` : "Free"}`,
+        `Paid total: ₹${order.total}`,
+        `Delivery address: ${order.address}, ${order.city} ${order.pin}`,
+        "",
+        "Made slowly, with love,",
+        "Meow.Cro Studio"
+      ].join("\n")
+    });
+    return true;
+  } catch (error) {
+    console.error("Razorpay payment was captured, but order email delivery failed:", error);
+    return false;
+  }
+}
+
+app.post("/api/payments/razorpay/verify", express.json({ limit: "32kb" }), async (req, res) => {
+  const details = req.body || {};
+  try {
+    const order = await paymentService.verifyPayment({
+      orderId: details.razorpay_order_id,
+      paymentId: details.razorpay_payment_id,
+      signature: details.razorpay_signature,
+      verificationToken: details.verificationToken
+    });
+    const notificationSent = await sendPaidOrderEmails(order);
+    res.json({ ok: true, order, notificationSent });
+  } catch (error) {
+    if (error instanceof PaymentVerificationError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    console.error("Razorpay payment verification failed:", error);
+    res.status(502).json({ error: "We couldn't verify the payment right now. Please try again shortly." });
+  }
+});
+
+app.post("/api/payments/razorpay/confirm", express.json({ limit: "32kb" }), async (req, res) => {
+  const details = req.body || {};
+  try {
+    const order = await paymentService.verifyPayment({
+      orderId: details.razorpay_order_id,
+      paymentId: details.razorpay_payment_id,
+      signature: details.razorpay_signature,
+      verificationToken: details.verificationToken
+    });
+    res.json({ ok: true, order });
+  } catch (error) {
+    if (error instanceof PaymentVerificationError) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    console.error("Razorpay confirmation check failed:", error);
+    res.status(502).json({ error: "We couldn't confirm the payment right now. Please refresh to try again." });
+  }
+});
+
 app.use(express.static(publicDir));
 
 app.use((error, req, res, next) => {
@@ -254,5 +408,8 @@ app.listen(port, "0.0.0.0", () => {
   console.log(`Meow.Cro is listening on port ${port}`);
   if (!emailService.configured) {
     console.warn(emailConfigurationMessage);
+  }
+  if (!paymentService.configured) {
+    console.warn("Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to the server environment to accept UPI payments.");
   }
 });
