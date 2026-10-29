@@ -14,8 +14,16 @@ function secureEqual(left, right) {
 
 export function createRazorpayService(environment, clientFactory = (keyId, keySecret) =>
   new Razorpay({ key_id: keyId, key_secret: keySecret })) {
+
   const keyId = environment.RAZORPAY_KEY_ID;
   const keySecret = environment.RAZORPAY_KEY_SECRET;
+
+  // Temporary diagnostic: log presence only, never credential values.
+  console.log("Razorpay environment check:", {
+    keyIdPresent: Boolean(keyId),
+    keySecretPresent: Boolean(keySecret)
+  });
+
   const configured = Boolean(keyId && keySecret);
   const client = configured ? clientFactory(keyId, keySecret) : null;
 
