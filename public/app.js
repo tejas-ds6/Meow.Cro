@@ -180,6 +180,7 @@ function renderCart() {
     document.body.append(floatingCheckout);
   }
   floatingCheckout.hidden = count === 0 || Boolean(document.querySelector("#checkout-form"));
+  document.body.classList.toggle("has-floating-checkout", !floatingCheckout.hidden);
   floatingCheckout.textContent = `Checkout · ${count} ${count === 1 ? "item" : "items"} · ${formatPrice(cartStore.total())} →`;
   renderCheckoutSummary();
 }
