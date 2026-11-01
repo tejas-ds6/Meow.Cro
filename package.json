@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node --check server.js && node --check server/account-service.js && node --check server/database.js && node --check server/email-service.js && node --check server/nimbuspost-service.js && node --check server/order-email.js && node --check server/payment-service.js && node --check server/validation.js && node --check public/app.js && node --check public/account.js && node --check public/admin.js && node --check public/catalog.js",
     "start": "node server.js",
     "test": "node --test"
   },
@@ -11,9 +12,13 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@neon/config": "^1.9.6",
+    "@neon/env": "^1.6.6",
+    "@neondatabase/serverless": "^1.2.0",
     "dotenv": "^16.6.1",
     "express": "^5.3.0",
     "express-rate-limit": "^8.0.1",
+    "pg": "^8.23.1",
     "razorpay": "^2.9.8",
     "resend": "^6.34.1"
   },

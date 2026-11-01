@@ -238,14 +238,62 @@ function closeCart() {
   document.body.classList.remove("no-scroll");
 }
 
-function showProduct(id) {
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>\"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character]);
+}
+
+async function loadProductReviews(productId) {
+  const response = await fetch(`/api/products/${encodeURIComponent(productId)}/reviews`, { headers: { Accept: "application/json" } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || "Unable to load reviews.");
+  return body;
+}
+
+async function showProduct(id) {
   const product = getProduct(id);
   const dialog = document.querySelector(".product-dialog");
   if (!product || !dialog) return;
-  const reviewCount = Number.isInteger(product.reviewCount) && product.reviewCount > 0 ? product.reviewCount : 0;
-  const reviewStars = reviewCount ? '<span class="review-stars" aria-label="5 out of 5 stars">★★★★★</span>' : "";
-  dialog.querySelector(".dialog-content").innerHTML = `<div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${product.alt}"></div><div class="dialog-product-copy"><p class="eyebrow">${product.category} · made slowly</p><h2>${product.name}</h2><strong class="dialog-price">${formatPrice(product.price)}</strong><div class="product-reviews" aria-label="${reviewCount} reviews">${reviewStars}<span>${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span></div><p>A little handmade happiness for your everyday. Carefully crocheted in a small batch, with the lovely details that make every piece feel like yours.</p><div class="dialog-color"><span>Color</span><strong>${product.color}</strong></div><button class="button button-primary dialog-add" type="button" data-add="${product.id}">Add to bag <span>→</span></button><small>Made with love. Ships with care.</small></div>`;
-  dialog.showModal();
+  try {
+    const reviewData = await loadProductReviews(product.id);
+    const summary = reviewData.summary || {};
+    const reviewCount = Number(summary.totalReviews || 0);
+    const averageRating = Number(summary.averageRating || 0);
+    const featuredCards = (reviewData.featuredReviews || []).slice(0, 2).map((review) => `
+      <article class="review-card">
+        <div class="review-card-head">
+          <strong>${escapeHtml(review.customerName || "Verified customer")}</strong>
+          <span aria-label="${Number(review.rating)} out of 5 stars">${"★".repeat(Number(review.rating))}</span>
+        </div>
+        <p>${escapeHtml(review.reviewText)}</p>
+        ${review.photos?.length ? `<div class="review-card-photos">${review.photos.map((photo) => `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText || "Customer product photo")}" loading="lazy">`).join("")}</div>` : ""}
+        <div class="review-card-meta"><span>Verified purchase</span><time datetime="${escapeHtml(review.createdAt)}">${escapeHtml(new Date(review.createdAt).toLocaleDateString("en-IN", { dateStyle: "medium" }))}</time></div>
+      </article>
+    `).join("") || '<p class="empty-review-copy">Be the first to share your experience.</p>';
+    dialog.querySelector(".dialog-content").innerHTML = `
+      <div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div>
+      <div class="dialog-product-copy">
+        <p class="eyebrow">${escapeHtml(product.category)} · made slowly</p>
+        <h2>${escapeHtml(product.name)}</h2>
+        <strong class="dialog-price">${formatPrice(product.price)}</strong>
+        <div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5 from ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}">
+          <span class="review-stars" aria-hidden="true">★★★★★</span>
+          <span class="review-count">${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span>
+        </div>
+        <p class="dialog-description">A little handmade happiness for your everyday. Carefully crocheted in a small batch, with the lovely details that make every piece feel like yours.</p>
+        <div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div>
+        <button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button>
+        <small>Made with love. Ships with care.</small>
+        <section class="featured-reviews" aria-labelledby="featured-reviews-heading">
+          <h3 id="featured-reviews-heading">Customer reviews</h3>
+          ${featuredCards}
+        </section>
+      </div>`;
+    dialog.showModal();
+  } catch (error) {
+    showToast(error.message || "Unable to load this product's reviews.");
+  }
 }
 
 async function renderConfirmation() {
@@ -275,19 +323,26 @@ async function renderConfirmation() {
     card.innerHTML = `<div class="confirmation-flower">✿</div><p class="eyebrow">A little mix-up</p><h1>No order <em>just yet.</em></h1><p class="confirmation-lede">We couldn't find an order in this browser. Your bag is still here if you'd like to pick up where you left off.</p><a class="button button-primary" href="shop.html">Visit the little shop <span>→</span></a>`;
     return;
   }
-  card.querySelector(".confirmation-name").textContent = order.name;
+  if (order.payment !== "UPI (paid)") {
+    showUnverifiedConfirmation(card);
+    return;
+  }
+  document.title = "Order received — Meow.Cro";
+  card.querySelector(".eyebrow").textContent = "Order received";
+  const heading = card.querySelector("h1");
+  heading.replaceChildren(document.createTextNode("Your order is "), document.createElement("em"));
+  heading.querySelector("em").textContent = "in!";
+  const lede = card.querySelector(".confirmation-lede");
+  lede.replaceChildren(document.createTextNode("Thank you, "), document.createElement("strong"), document.createTextNode("! Your order has been placed."));
+  lede.querySelector("strong").textContent = order.name;
   card.querySelector(".order-number").textContent = order.number;
   card.querySelector(".confirmation-address").textContent = `${order.address}, ${order.city} ${order.pin}`;
   card.querySelector(".confirmation-payment").textContent = order.payment;
   card.querySelector(".confirmation-total").textContent = formatPrice(order.total);
   const note = card.querySelector(".confirmation-note");
-  if (order.payment === "UPI (paid)") {
-    note.textContent = order.notificationSent === false
-      ? "Your payment is confirmed. We couldn't send the order email just now, but your order number is saved above."
-      : "Your payment has been received and verified by Razorpay.";
-  } else {
-    note.textContent = "Payment is due when your Cash on delivery parcel arrives. The studio will follow up to confirm your order.";
-  }
+  note.textContent = order.notificationSent === false
+    ? "Your payment is confirmed. We couldn't send the customer confirmation email just now, but your order number is saved above."
+    : "Your payment has been received and verified by Razorpay.";
 }
 
 function showUnverifiedConfirmation(card) {
@@ -313,6 +368,18 @@ function initializeShop() {
 
 function initializeCheckout() {
   const form = document.querySelector("#checkout-form");
+  if (form) {
+    fetch("/api/account/me")
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((profile) => {
+        if (!profile?.customer) return;
+        const fields = form.elements;
+        fields.name.value = profile.customer.name;
+        fields.email.value = profile.customer.email;
+        fields.phone.value = profile.customer.phone;
+      })
+      .catch((error) => console.error("Unable to load signed-in checkout details.", error));
+  }
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!cartStore.quantity()) {
@@ -321,131 +388,85 @@ function initializeCheckout() {
     }
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form).entries());
-    values.payment = form.querySelector('input[name="payment"]:checked')?.value;
-    const subtotal = cartStore.total();
-    const shipping = subtotal > 599 ? 0 : 29;
+    values.payment = "UPI";
     const submitButton = form.querySelector('[type="submit"]');
     const originalButtonText = submitButton.innerHTML;
 
-    if (values.payment === "UPI") {
-      submitButton.disabled = true;
-      submitButton.textContent = "Opening secure payment…";
-      let paymentCallbackReceived = false;
-      let paymentReference = "";
+    submitButton.disabled = true;
+    submitButton.textContent = "Opening secure payment…";
+    let paymentCallbackReceived = false;
+    let paymentReference = "";
+    try {
+      const paymentOrder = await postJson("/api/payments/razorpay/orders", {
+        ...values,
+        items: cartStore.items.map(({ id, qty }) => ({ id, qty }))
+      });
+      await loadRazorpayCheckout();
+      const paymentResult = await new Promise((resolve, reject) => {
+        const checkout = new window.Razorpay({
+          key: paymentOrder.keyId,
+          amount: paymentOrder.amount,
+          currency: paymentOrder.currency,
+          name: "Meow.Cro",
+          description: "Handmade crochet order",
+          order_id: paymentOrder.orderId,
+          prefill: { name: values.name, email: values.email, contact: values.phone },
+          method: { upi: true, card: false, netbanking: false, wallet: false, emi: false, paylater: false },
+          theme: { color: "#b85f48" },
+          handler: async (details) => {
+            paymentCallbackReceived = true;
+            paymentReference = details.razorpay_payment_id || "";
+            try {
+              const verified = await postJson("/api/payments/razorpay/verify", {
+                ...details,
+                verificationToken: paymentOrder.verificationToken
+              });
+              resolve({ verified, details });
+            } catch (error) {
+              reject(error);
+            }
+          },
+          modal: { ondismiss: () => reject(new Error("Payment was not confirmed. Your bag is still here.")) }
+        });
+        checkout.on("payment.failed", (result) => {
+          reject(new Error(result.error?.description || "Payment wasn't completed. Your bag is still here."));
+        });
+        checkout.open();
+      });
+      const order = {
+        ...paymentResult.verified.order,
+        notificationSent: paymentResult.verified.notificationSent,
+        paymentProof: {
+          razorpay_order_id: paymentResult.details.razorpay_order_id,
+          razorpay_payment_id: paymentResult.details.razorpay_payment_id,
+          razorpay_signature: paymentResult.details.razorpay_signature,
+          verificationToken: paymentOrder.verificationToken
+        }
+      };
       try {
-        const paymentOrder = await postJson("/api/payments/razorpay/orders", {
-          ...values,
-          items: cartStore.items.map(({ id, qty }) => ({ id, qty }))
-        });
-        await loadRazorpayCheckout();
-        const paymentResult = await new Promise((resolve, reject) => {
-          const checkout = new window.Razorpay({
-            key: paymentOrder.keyId,
-            amount: paymentOrder.amount,
-            currency: paymentOrder.currency,
-            name: "Meow.Cro",
-            description: "Handmade crochet order",
-            order_id: paymentOrder.orderId,
-            prefill: { name: values.name, email: values.email, contact: values.phone },
-            method: { upi: true, card: false, netbanking: false, wallet: false, emi: false, paylater: false },
-            theme: { color: "#b85f48" },
-            handler: async (details) => {
-              paymentCallbackReceived = true;
-              paymentReference = details.razorpay_payment_id || "";
-              try {
-                const verified = await postJson("/api/payments/razorpay/verify", {
-                  ...details,
-                  verificationToken: paymentOrder.verificationToken
-                });
-                resolve({ verified, details });
-              } catch (error) {
-                reject(error);
-              }
-            },
-            modal: { ondismiss: () => reject(new Error("Payment was not confirmed. Your bag is still here.")) }
-          });
-          checkout.on("payment.failed", (result) => {
-            reject(new Error(result.error?.description || "Payment wasn't completed. Your bag is still here."));
-          });
-          checkout.open();
-        });
-        const order = {
-          ...paymentResult.verified.order,
-          notificationSent: paymentResult.verified.notificationSent,
-          paymentProof: {
-            razorpay_order_id: paymentResult.details.razorpay_order_id,
-            razorpay_payment_id: paymentResult.details.razorpay_payment_id,
-            razorpay_signature: paymentResult.details.razorpay_signature,
-            verificationToken: paymentOrder.verificationToken
-          }
-        };
-        try {
-          localStorage.setItem(orderStorageKey, JSON.stringify(order));
-        } catch (error) {
-          console.error("Unable to save the verified Meow.Cro order.", error);
-          showToast("Payment received, but this browser couldn't save your receipt. Please contact the studio with your payment reference.");
-          submitButton.disabled = false;
-          submitButton.innerHTML = originalButtonText;
-          return;
-        }
-        try {
-          cartStore.clear();
-        } catch (error) {
-          console.error("Unable to clear your bag after confirmed payment.", error);
-        }
-        window.location.assign("confirmation.html");
+        localStorage.setItem(orderStorageKey, JSON.stringify(order));
       } catch (error) {
-        console.error("Unable to complete Razorpay checkout.", error);
-        showToast(paymentCallbackReceived
-          ? `We couldn't verify payment${paymentReference ? ` ${paymentReference}` : ""}. If your UPI app shows a debit, don't pay again—contact the studio.`
-          : error.message);
+        console.error("Unable to save the verified Meow.Cro order.", error);
+        showToast("Payment received, but this browser couldn't save your receipt. Please contact the studio with your payment reference.");
         submitButton.disabled = false;
         submitButton.innerHTML = originalButtonText;
+        return;
       }
-      return;
-    }
-
-    const order = {
-      ...values,
-      number: `CR-${String(Date.now()).slice(-7)}`,
-      items: cartStore.items.map((item) => ({ id: item.id, qty: item.qty })),
-      subtotal,
-      shipping,
-      total: subtotal + shipping,
-      placedAt: new Date().toISOString()
-    };
-    try {
-      localStorage.setItem(orderStorageKey, JSON.stringify(order));
+      try {
+        cartStore.clear();
+      } catch (error) {
+        console.error("Unable to clear your bag after confirmed payment.", error);
+      }
+      window.location.assign("confirmation.html");
     } catch (error) {
-      console.error("Unable to save your Crosia order.", error);
-      showToast("Your order couldn't be saved. Please try again.");
-      return;
-    }
-
-    submitButton.disabled = true;
-    submitButton.textContent = "Sending your order…";
-    try {
-      await postEmail("/api/orders", {
-        ...order,
-        items: cartStore.items.map((item) => {
-          const product = getProduct(item.id);
-          return { name: product.name, qty: item.qty, unitPrice: product.price };
-        })
-      });
-    } catch (error) {
-      console.error("Unable to email your Crosia order.", error);
-      showToast(error.message);
+      console.error("Unable to complete Razorpay checkout.", error);
+      showToast(paymentCallbackReceived
+        ? `We couldn't verify payment${paymentReference ? ` ${paymentReference}` : ""}. If your UPI app shows a debit, don't pay again—contact the studio.`
+        : error.message);
       submitButton.disabled = false;
       submitButton.innerHTML = originalButtonText;
-      return;
     }
-
-    try {
-      cartStore.clear();
-    } catch (error) {
-      console.error("Unable to clear your Crosia bag after sending the order.", error);
-    }
-    window.location.assign("confirmation.html");
+    return;
   });
 }
 

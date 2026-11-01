@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f8f4ec">
+  <meta name="description" content="Meow.Cro order management.">
+  <title>Order management — Meow.Cro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=account-20261030"><script type="module" src="admin.js?v=account-20261030"></script>
+</head>
+<body>
+  <header class="site-header info-header account-header"><a class="brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>STUDIO ORDER DESK</small></span></a><button class="menu-toggle" aria-label="Open menu" aria-expanded="false">☰</button><nav class="main-nav" aria-label="Main navigation"><a href="index.html">Store</a><a class="active" href="admin.html">Orders</a></nav></header>
+  <main class="account-page admin-page">
+    <header class="account-heading"><p class="eyebrow">Studio order desk</p><h1>Orders, with <em>care.</em></h1><p>Update delivery progress and cancellation requests in the shared order record.</p></header>
+    <p class="account-message" id="admin-message" role="status" aria-live="polite">Checking the studio order desk…</p>
+    <section class="account-card admin-login" id="admin-login"><form class="account-form" id="admin-login-form"><h2>Studio <em>sign in.</em></h2><label class="field">Admin email<input name="email" type="email" autocomplete="username" required></label><label class="field">Admin password<input name="password" type="password" autocomplete="current-password" minlength="16" required></label><button class="button button-primary" type="submit">Sign in <span>→</span></button></form></section>
+    <section id="admin-dashboard" hidden><div class="account-welcome"><div><p class="eyebrow">Shared order database</p><h2>Recent <em>orders.</em></h2></div><div class="admin-actions"><button class="button button-outline" id="admin-refresh" type="button">Refresh orders</button><button class="button button-outline" id="admin-logout" type="button">Sign out</button></div></div><div class="admin-orders" id="admin-orders"></div><div class="admin-review-section"><div class="admin-review-header"><div><p class="eyebrow">Customer reviews</p><h3>Moderation <em>queue.</em></h3></div></div><div class="admin-review-tabs" role="tablist" aria-label="Review moderation tabs"><button class="review-tab is-active" type="button" data-review-tab="pending" role="tab" aria-selected="true">Pending</button><button class="review-tab" type="button" data-review-tab="approved" role="tab" aria-selected="false">Approved</button><button class="review-tab" type="button" data-review-tab="rejected" role="tab" aria-selected="false">Rejected</button></div><div class="admin-review-list" id="admin-reviews"></div></div></div></section>
+  </main>
+  <footer class="site-footer account-footer"><a class="brand footer-brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a><small>Private studio tools. Keep admin credentials secret.</small></footer>
+</body>
+</html>

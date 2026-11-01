@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f8f4ec">
+  <meta name="description" content="Your Meow.Cro account, orders and delivery updates.">
+  <meta name="referrer" content="no-referrer">
+  <title>My account — Meow.Cro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=account-20261030"><script type="module" src="account.js?v=account-20261030"></script>
+</head>
+<body>
+  <header class="site-header info-header account-header"><a class="brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a><button class="menu-toggle" aria-label="Open menu" aria-expanded="false">☰</button><nav class="main-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="shop.html">Shop</a><a class="active" href="account.html">My account</a><a href="order-tracking.html">Order updates</a></nav></header>
+  <main class="account-page">
+    <header class="account-heading"><p class="eyebrow">A little space that's yours</p><h1>Your Meow.Cro <em>account.</em></h1><p>Keep your details, orders and delivery updates together.</p></header>
+    <p class="account-message" id="account-message" role="status" aria-live="polite">Loading your account…</p>
+    <section class="account-auth account-card" id="account-auth">
+      <div id="account-auth-forms">
+        <div class="account-auth-tabs"><button type="button" class="active" data-auth-view="login">Sign in</button><button type="button" data-auth-view="register">Create account</button></div>
+        <form class="account-form" id="login-form">
+          <h2>Welcome <em>back.</em></h2>
+          <label class="field">Email address<input name="email" type="email" autocomplete="email" required></label>
+          <label class="field">Password<input name="password" type="password" autocomplete="current-password" required></label>
+          <button class="button button-primary" type="submit">Sign in <span>→</span></button>
+          <button class="account-text-button" type="button" data-auth-view="forgot">Forgot your password?</button>
+        </form>
+        <form class="account-form" id="register-form" hidden>
+          <h2>A little account <em>for you.</em></h2>
+          <label class="field">Full name<input name="name" autocomplete="name" required maxlength="120"></label>
+          <label class="field">Email address<input name="email" type="email" autocomplete="email" required></label>
+          <label class="field">Mobile number<input name="phone" type="tel" autocomplete="tel" required pattern="[0-9+()\s-]{7,30}"></label>
+          <label class="field">Password <span class="optional">(at least 10 characters)</span><input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+          <label class="field">Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+          <button class="button button-primary" type="submit">Create account <span>→</span></button>
+        </form>
+        <form class="account-form" id="forgot-form" hidden>
+          <h2>Find your way <em>back.</em></h2><p>We’ll email you a secure password reset link.</p>
+          <label class="field">Email address<input name="email" type="email" autocomplete="email" required></label>
+          <button class="button button-primary" type="submit">Send reset link <span>→</span></button>
+          <button class="account-text-button" type="button" data-auth-view="login">Back to sign in</button>
+        </form>
+        <form class="account-form" id="reset-form" hidden>
+          <h2>Choose a new <em>password.</em></h2>
+          <label class="field">New password<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+          <label class="field">Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+          <button class="button button-primary" type="submit">Reset password <span>→</span></button>
+          <button class="account-text-button" type="button" data-auth-view="forgot">This link expired? Request another</button>
+        </form>
+      </div>
+    </section>
+    <section class="account-dashboard" id="account-dashboard" hidden>
+      <header class="account-welcome"><div><p class="eyebrow">Welcome home</p><h2>Hello, <em id="account-name"></em></h2></div><button class="button button-outline" id="account-logout" type="button">Sign out</button></header>
+      <div class="account-stats" id="account-stats"></div>
+      <nav class="account-tabs" aria-label="Account sections"><button class="active" type="button" data-account-view="orders">My orders</button><button type="button" data-account-view="profile">My profile</button><button type="button" data-account-view="addresses">Saved addresses</button><button type="button" data-account-view="settings">Account settings</button></nav>
+      <section class="account-panel" data-account-panel="orders"><div class="account-panel-heading"><div><p class="eyebrow">The little things you chose</p><h2>My <em>orders.</em></h2></div></div><div class="account-orders" id="account-orders"></div><article class="account-card order-detail" id="order-detail" hidden></article></section>
+      <section class="account-panel" data-account-panel="profile" hidden><div class="account-panel-heading"><div><p class="eyebrow">Your details</p><h2>My <em>profile.</em></h2></div></div><form class="account-form account-card" id="profile-form"><label class="field">Full name<input name="name" autocomplete="name" required maxlength="120"></label><label class="field">Email address<input name="email" type="email" disabled></label><label class="field">Mobile number<input name="phone" type="tel" autocomplete="tel" required pattern="[0-9+()\s-]{7,30}"></label><button class="button button-primary" type="submit">Save profile <span>→</span></button></form></section>
+      <section class="account-panel" data-account-panel="addresses" hidden><div class="account-panel-heading"><div><p class="eyebrow">For your happy mail</p><h2>Saved <em>addresses.</em></h2></div></div><div class="address-list" id="address-list"></div><form class="account-form account-card" id="address-form"><h3 id="address-form-heading">Add an address</h3><input name="id" type="hidden"><label class="field">Label<input name="label" required maxlength="40" placeholder="Home, work…"></label><label class="field">Recipient name<input name="recipientName" required maxlength="120"></label><label class="field">Mobile number<input name="phone" type="tel" required pattern="[0-9+()\s-]{7,30}"></label><label class="field">Street address<input name="address" required maxlength="300"></label><label class="field">City<input name="city" required maxlength="100"></label><label class="field">PIN code<input name="pin" inputmode="numeric" pattern="[0-9]{6}" required></label><button class="button button-primary" type="submit">Save address <span>→</span></button></form></section>
+      <section class="account-panel" data-account-panel="settings" hidden><div class="account-panel-heading"><div><p class="eyebrow">Keep your account yours</p><h2>Account <em>settings.</em></h2></div></div><form class="account-form account-card" id="password-form"><h3>Change password</h3><label class="field">Current password<input name="currentPassword" type="password" autocomplete="current-password" required></label><label class="field">New password<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label><button class="button button-primary" type="submit">Change password <span>→</span></button></form></section>
+    </section>
+  </main>
+  <footer class="site-footer account-footer"><a class="brand footer-brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a><div class="footer-links"><a href="contact.html">Contact</a><a href="privacy-policy.html">Privacy</a><a href="terms.html">Terms</a></div><small>© 2026 Meow.Cro Studio. Made slowly, with love.</small></footer>
+</body>
+</html>

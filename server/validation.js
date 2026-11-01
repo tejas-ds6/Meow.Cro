@@ -18,7 +18,7 @@ export function text(value, label, { required = true, max = 2000 } = {}) {
 }
 
 export function emailAddress(value) {
-  const email = text(value, "Email address", { max: 254 });
+  const email = text(value, "Email address", { max: 254 }).toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new Error("Enter a valid email address.");
   }

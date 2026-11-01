@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createEmailService, emailConfigurationMessage } from "../server/email-service.js";
+import { sendPaidOrderEmails } from "../server/order-email.js";
 import { createRazorpayService } from "../server/payment-service.js";
 import { emailAddress, photoAttachment, text } from "../server/validation.js";
 
@@ -10,6 +11,41 @@ const emailConfiguration = {
   SMTP_FROM: "studio@example.test",
   MAIL_TO: "orders@example.test"
 };
+
+test("verified UPI payment sends a success email to the customer and notifies the studio", async () => {
+  const messages = [];
+  const emailService = {
+    configured: true,
+    async send(message) {
+      messages.push(message);
+      return { id: `email_${messages.length}` };
+    }
+  };
+  const order = {
+    number: "MC-TEST-123",
+    name: "Test buyer",
+    email: "buyer@example.test",
+    phone: "+91 98765 43210",
+    address: "1 Test Street",
+    city: "Test City",
+    pin: "123456",
+    items: [{ name: "Flower keychain", qty: 2, unitPrice: 250 }],
+    subtotal: 500,
+    shipping: 29,
+    total: 529,
+    paymentId: "pay_test_456"
+  };
+
+  const customerEmailSent = await sendPaidOrderEmails(order, emailService, "studio@example.test");
+
+  assert.equal(customerEmailSent, true);
+  assert.equal(messages[0].to, order.email);
+  assert.match(messages[0].subject, /Payment received/);
+  assert.match(messages[0].text, /Your UPI payment for order MC-TEST-123 has been received/);
+  assert.match(messages[0].text, /Paid total: ₹529/);
+  assert.equal(messages[1].to, "studio@example.test");
+  assert.match(messages[1].text, /Razorpay payment ID: pay_test_456/);
+});
 
 test("email service creates a Resend client from configuration and sends from the studio", async () => {
   let clientApiKey;
