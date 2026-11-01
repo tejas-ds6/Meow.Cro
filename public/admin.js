@@ -2,6 +2,10 @@ const message = document.querySelector("#admin-message");
 const loginPanel = document.querySelector("#admin-login");
 const dashboard = document.querySelector("#admin-dashboard");
 const orderList = document.querySelector("#admin-orders");
+const ordersView = document.querySelector("#admin-orders-view");
+const reviewsSection = document.querySelector("#admin-review-section");
+const dashboardTitle = document.querySelector("#admin-view-title");
+const viewToggle = document.querySelector("#admin-view-toggle");
 const reviewList = document.querySelector("#admin-reviews");
 const reviewTabs = [...document.querySelectorAll(".review-tab")];
 const statuses = [
@@ -15,10 +19,22 @@ const price = (amount) => new Intl.NumberFormat("en-IN", {
   style: "currency", currency: "INR", maximumFractionDigits: 0
 }).format(amount);
 
+let dashboardView = "orders";
+
 function showMessage(value, isError = false) {
   message.textContent = value;
   message.classList.toggle("message-error", isError);
   message.classList.toggle("message-success", !isError);
+}
+
+function setDashboardView(view) {
+  dashboardView = view;
+  const showingReviews = view === "reviews";
+  ordersView.hidden = showingReviews;
+  reviewsSection.hidden = !showingReviews;
+  dashboardTitle.innerHTML = showingReviews ? "Customer <em>reviews.</em>" : "Recent <em>orders.</em>";
+  viewToggle.textContent = showingReviews ? "Recent orders" : "Customer reviews";
+  viewToggle.setAttribute("aria-pressed", String(showingReviews));
 }
 
 async function request(path, options = {}) {
@@ -171,11 +187,32 @@ orderList.addEventListener("submit", async (event) => {
 });
 
 document.querySelector("#admin-refresh").addEventListener("click", async () => {
+  const button = document.querySelector("#admin-refresh");
+  button.disabled = true;
   try {
     await loadOrders();
     showMessage("Orders refreshed.");
   } catch (error) {
     showMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+viewToggle.addEventListener("click", async () => {
+  if (dashboardView === "reviews") {
+    setDashboardView("orders");
+    return;
+  }
+  viewToggle.disabled = true;
+  try {
+    const activeTab = document.querySelector(".review-tab.is-active")?.dataset.reviewTab || "pending";
+    await loadReviews(activeTab);
+    setDashboardView("reviews");
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    viewToggle.disabled = false;
   }
 });
 
