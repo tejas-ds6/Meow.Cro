@@ -169,6 +169,8 @@ npm start
 
 Open [http://localhost:3000](http://localhost:3000) in your browser. The server initializes the PostgreSQL schema on startup when `DATABASE_URL` is configured. The local `.env` file is only for local development; production secrets must be set in the hosting provider's application environment.
 
+The XML sitemap is available at `/sitemap.xml`. Set `SITE_URL` to your public canonical site origin in production (for example, `https://www.example.com`) so sitemap entries use that domain; when unset, the current request origin is used.
+
 ### 5. Run checks
 
 ```bash
@@ -183,6 +185,7 @@ npm run build
 | Variable | Purpose |
 |---|---|
 | `PORT` | Port used by the Express server (defaults to `3000`) |
+| `SITE_URL` | Optional public canonical site URL used to build absolute sitemap links; defaults to the request origin |
 | `DATABASE_URL` | Required PostgreSQL connection string; use Neon’s pooled connection URL with `sslmode=require` |
 | `RAZORPAY_KEY_ID` | Razorpay public key ID for UPI checkout |
 | `RAZORPAY_KEY_SECRET` | Server-side Razorpay secret; keep private |

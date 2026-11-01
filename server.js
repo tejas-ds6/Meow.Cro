@@ -19,6 +19,10 @@ const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be a valid TCP port between 1 and 65535.");
 }
+const configuredSiteUrl = process.env.SITE_URL ? new URL(process.env.SITE_URL) : null;
+if (configuredSiteUrl && !["http:", "https:"].includes(configuredSiteUrl.protocol)) {
+  throw new Error("SITE_URL must use HTTP or HTTPS.");
+}
 app.set("trust proxy", 1);
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
@@ -29,6 +33,10 @@ const accountService = pool ? createAccountService({ database: pool, emailServic
 const productsById = new Map(products.map((product) => [product.id, product]));
 const sessionCookieName = "meowcro_session";
 const accountDatabaseUnavailable = "Customer accounts and saved order tracking require PostgreSQL. Configure DATABASE_URL and restart the server.";
+const sitemapPaths = [
+  "/", "/shop.html", "/story.html", "/custom.html", "/contact.html", "/faq.html",
+  "/shipping-policy.html", "/returns-refunds.html", "/privacy-policy.html", "/terms.html"
+];
 const validOrderStatuses = [
   "Order Placed", "Order Confirmed", "Processing", "Ready for Delivery",
   "Shipped / Out for Delivery", "Delivered", "Cancelled", "Failed Delivery", "Returned"
@@ -900,6 +908,15 @@ app.get("/api/health/database", async (_req, res) => {
     logDatabaseError("health query", error);
     res.status(503).json({ configured: true, connected: false, schemaReady: isDatabaseReady() });
   }
+});
+
+app.get("/sitemap.xml", (req, res) => {
+  const siteOrigin = configuredSiteUrl?.origin || `${req.protocol}://${req.get("host")}`;
+  const locations = sitemapPaths
+    .map((page) => new URL(page, siteOrigin).href.replaceAll("&", "&amp;"))
+    .map((location) => `  <url>\n    <loc>${location}</loc>\n  </url>`)
+    .join("\n");
+  res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${locations}\n</urlset>\n`);
 });
 
 app.use(express.static(publicDir));
