@@ -4,8 +4,6 @@ const dashboard = document.querySelector("#account-dashboard");
 const authForms = ["login", "register", "forgot", "reset"].map((name) => document.querySelector(`#${name}-form`));
 let accountData;
 let orders = [];
-let currentOrderDetail;
-const reviewPhotosByForm = new WeakMap();
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -13,32 +11,6 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
 const price = (amount) => new Intl.NumberFormat("en-IN", {
   style: "currency", currency: "INR", maximumFractionDigits: 0
 }).format(amount);
-
-function reviewFormMarkup(orderId, productId) {
-  return `<form class="order-review-form" data-review-order="${escapeHtml(orderId)}" data-review-product="${escapeHtml(productId)}">
-    <label class="field">Your rating<select name="rating" required><option value="">Choose a rating</option>${[5, 4, 3, 2, 1].map((rating) => `<option value="${rating}">${rating} ${rating === 1 ? "star" : "stars"}</option>`).join("")}</select></label>
-    <label class="field">Your review<textarea name="reviewText" rows="3" maxlength="1000" minlength="8" required placeholder="Tell us what you love about it."></textarea></label>
-    <label class="field">Product photos <span class="optional">(up to 5)</span><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
-    <div class="review-photo-previews" aria-live="polite"></div>
-    <div class="order-review-form-actions"><button class="button button-primary" type="submit">Submit review <span>→</span></button><button class="account-text-button" type="button" data-review-cancel>Cancel</button></div>
-  </form>`;
-}
-
-function renderReviewPhotoPreviews(form) {
-  const preview = form.querySelector(".review-photo-previews");
-  if (!preview) return;
-  const photos = reviewPhotosByForm.get(form) || [];
-  preview.innerHTML = photos.map((photo, index) => `<div class="review-photo-preview"><img src="${escapeHtml(photo.dataUrl)}" alt="Selected review photo ${index + 1}"><button type="button" data-review-photo-remove="${index}" aria-label="Remove photo ${index + 1}">×</button></div>`).join("");
-}
-
-function readReviewPhoto(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve({ file, dataUrl: reader.result });
-    reader.onerror = () => reject(new Error("A selected photo could not be read. Please choose it again."));
-    reader.readAsDataURL(file);
-  });
-}
 
 function showMessage(message, isError = false) {
   accountMessage.textContent = message;
@@ -102,10 +74,10 @@ function renderOrders() {
   }).join("");
 }
 
-function renderOrderDetails(order, scroll = true) {
+function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
   const detail = document.querySelector("#order-detail");
-  currentOrderDetail = order;
   detail.dataset.orderId = order.id;
+  const reviewsByProduct = new Map(reviewStatuses.map((review) => [review.productId, review.status]));
   const delivery = order.deliveryMethod === "Self Delivery"
     ? '<div class="delivery-note"><strong>Delivered by MEOWCRO</strong><span>Delivery progress is updated by our studio.</span></div>'
     : order.deliveryMethod === "Courier"
@@ -117,17 +89,27 @@ function renderOrderDetails(order, scroll = true) {
     ${delivery}
     <div class="order-detail-items">${order.items.map((item) => {
       const productId = String(item.id ?? item.productId ?? "");
-      const reviewStatus = order.reviewStatuses?.[productId];
-      const reviewAction = reviewStatus === "approved"
-        ? '<span class="review-submission-status">Review approved</span>'
+      const reviewStatus = reviewsByProduct.get(productId);
+      const reviewMessage = reviewStatus === "approved"
+        ? "Review approved"
         : reviewStatus === "pending"
-          ? '<span class="review-submission-status">Review submitted – Awaiting approval</span>'
+          ? "Review submitted – Awaiting approval"
           : reviewStatus === "rejected"
-            ? '<span class="review-submission-status">Review not approved</span>'
-          : order.status === "Delivered" && productId
-            ? `<button class="button button-outline" type="button" data-review-write data-review-order="${escapeHtml(order.id)}" data-review-product="${escapeHtml(productId)}">Write a review</button>`
+            ? "Review not approved"
             : "";
-      return `<article class="detail-order-item"><div class="detail-item">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Quantity ${item.qty} · ${price(item.unitPrice)} each</small></div><strong>${price(item.qty * item.unitPrice)}</strong></div><div class="order-item-review">${reviewAction}</div></article>`;
+      const reviewAction = order.status === "Delivered"
+        ? reviewStatus
+          ? `<p class="order-review-status">${reviewMessage}</p>`
+          : `<button class="account-text-button" type="button" data-write-review="${escapeHtml(productId)}">Write a review</button>
+             <form class="account-review-form" data-review-form data-order-id="${escapeHtml(order.id)}" data-product-id="${escapeHtml(productId)}" hidden>
+               <fieldset class="review-rating"><legend>Your rating</legend><div>${[1, 2, 3, 4, 5].map((rating) => `<label aria-label="${rating} stars"><input type="radio" name="rating" value="${rating}" required><span aria-hidden="true">★</span></label>`).join("")}</div></fieldset>
+               <label class="field">Your review<textarea name="reviewText" rows="3" maxlength="1000" minlength="8" required placeholder="Tell us what you think of your handmade piece."></textarea></label>
+               <label class="field">Product photos <span class="optional">(up to 5)</span><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple data-review-photos></label>
+               <div class="review-photo-previews" data-review-previews></div>
+               <button class="button button-primary" type="submit">Submit review <span>→</span></button>
+             </form>`
+        : "";
+      return `<div class="detail-item-row"><div class="detail-item">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Quantity ${item.qty} · ${price(item.unitPrice)} each</small></div><strong>${price(item.qty * item.unitPrice)}</strong></div>${reviewAction}</div>`;
     }).join("")}</div>
     <div class="order-detail-totals"><p>Subtotal <strong>${price(order.subtotal)}</strong></p><p>Shipping <strong>${price(order.shipping)}</strong></p>${order.discount ? `<p>Discount <strong>−${price(order.discount)}</strong></p>` : ""}<p class="grand-total">Total <strong>${price(order.total)}</strong></p></div>
     <div class="order-detail-address"><h4>Delivery address</h4><p>${escapeHtml(order.name)} · ${escapeHtml(order.phone)}<br>${escapeHtml(order.address)}, ${escapeHtml(order.city)} ${escapeHtml(order.pin)}</p><p>${escapeHtml(order.paymentMethod)} · ${escapeHtml(order.paymentStatus)}</p></div>
@@ -158,6 +140,19 @@ function renderAddresses() {
   container.innerHTML = accountData.addresses.length
     ? accountData.addresses.map((address) => `<article class="account-card address-card"><div><span class="status-pill">${escapeHtml(address.label)}</span><h3>${escapeHtml(address.recipientName)}</h3><p>${escapeHtml(address.address)}, ${escapeHtml(address.city)} ${escapeHtml(address.pin)}<br>${escapeHtml(address.phone)}</p></div><div class="address-actions"><button class="account-text-button" type="button" data-address-edit="${escapeHtml(address.id)}">Edit</button><button class="account-text-button" type="button" data-address-delete="${escapeHtml(address.id)}">Delete</button></div></article>`).join("")
     : '<div class="account-card account-empty"><p>No saved addresses yet. Add one for quicker checkout.</p></div>';
+}
+
+function renderReviewPhotoPreviews(form) {
+  const previewContainer = form.querySelector("[data-review-previews]");
+  const input = form.querySelector("[data-review-photos]");
+  if (!previewContainer || !input) return;
+  previewContainer.querySelectorAll("img").forEach((image) => {
+    if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src);
+  });
+  previewContainer.innerHTML = [...input.files].map((file, index) => `
+    <figure><img src="${URL.createObjectURL(file)}" alt="Selected product photo ${index + 1}">
+      <button type="button" data-remove-review-photo="${index}" aria-label="Remove photo ${index + 1}">×</button></figure>
+  `).join("");
 }
 
 async function refreshDashboard() {
@@ -199,33 +194,37 @@ document.addEventListener("click", async (event) => {
   const viewOrder = event.target.closest("[data-order-view]");
   if (viewOrder) {
     try {
-      const { order } = await request(`/api/account/orders/${encodeURIComponent(viewOrder.dataset.orderView)}`);
-      renderOrderDetails(order);
+      const orderId = encodeURIComponent(viewOrder.dataset.orderView);
+      const [{ order }, { reviews }] = await Promise.all([
+        request(`/api/account/orders/${orderId}`),
+        request(`/api/account/orders/${orderId}/reviews`)
+      ]);
+      renderOrderDetails(order, reviews);
     } catch (error) {
       showMessage(error.message, true);
     }
     return;
   }
-  const writeReview = event.target.closest("[data-review-write]");
+  const writeReview = event.target.closest("[data-write-review]");
   if (writeReview) {
-    const action = writeReview.closest(".order-item-review");
-    action.innerHTML = reviewFormMarkup(writeReview.dataset.reviewOrder, writeReview.dataset.reviewProduct);
-    action.querySelector('[name="rating"]')?.focus();
+    const form = writeReview.nextElementSibling;
+    if (form?.matches("[data-review-form]")) {
+      form.hidden = !form.hidden;
+      writeReview.textContent = form.hidden ? "Write a review" : "Close review form";
+      if (!form.hidden) form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
     return;
   }
-  const cancelReview = event.target.closest("[data-review-cancel]");
-  if (cancelReview) {
-    const action = cancelReview.closest(".order-item-review");
-    if (currentOrderDetail) renderOrderDetails(currentOrderDetail, false);
-    else action.innerHTML = "";
-    return;
-  }
-  const removeReviewPhoto = event.target.closest("[data-review-photo-remove]");
-  if (removeReviewPhoto) {
-    const form = removeReviewPhoto.closest(".order-review-form");
-    const photos = reviewPhotosByForm.get(form) || [];
-    photos.splice(Number(removeReviewPhoto.dataset.reviewPhotoRemove), 1);
-    reviewPhotosByForm.set(form, photos);
+  const removePhoto = event.target.closest("[data-remove-review-photo]");
+  if (removePhoto) {
+    const form = removePhoto.closest("[data-review-form]");
+    const input = form?.querySelector("[data-review-photos]");
+    if (!input) return;
+    const transfer = new DataTransfer();
+    [...input.files].forEach((file, index) => {
+      if (index !== Number(removePhoto.dataset.removeReviewPhoto)) transfer.items.add(file);
+    });
+    input.files = transfer.files;
     renderReviewPhotoPreviews(form);
     return;
   }
@@ -408,31 +407,62 @@ document.querySelector("#password-form").addEventListener("submit", async (event
   }
 });
 
+document.querySelector("#account-dashboard").addEventListener("change", (event) => {
+  const input = event.target.closest("[data-review-photos]");
+  if (!input) return;
+  const form = input.closest("[data-review-form]");
+  if (input.files.length > 5) {
+    input.value = "";
+    renderReviewPhotoPreviews(form);
+    showMessage("Choose up to 5 product photos.", true);
+    return;
+  }
+  if ([...input.files].some((file) => file.size > 5 * 1024 * 1024)) {
+    input.value = "";
+    renderReviewPhotoPreviews(form);
+    showMessage("Each product photo must be 5 MB or smaller.", true);
+    return;
+  }
+  renderReviewPhotoPreviews(form);
+});
+
 document.querySelector("#account-dashboard").addEventListener("submit", async (event) => {
-  const reviewForm = event.target.closest(".order-review-form");
+  const reviewForm = event.target.closest("[data-review-form]");
   if (reviewForm) {
     event.preventDefault();
-    const photos = reviewPhotosByForm.get(reviewForm) || [];
-    const restore = setFormBusy(reviewForm, true, "Submitting review…");
+    const submitButton = reviewForm.querySelector('[type="submit"]');
+    submitButton.disabled = true;
+    const originalLabel = submitButton.textContent;
+    submitButton.textContent = "Submitting…";
     try {
-      await request(`/api/account/orders/${encodeURIComponent(reviewForm.dataset.reviewOrder)}/items/${encodeURIComponent(reviewForm.dataset.reviewProduct)}/review`, {
+      const files = [...reviewForm.elements.photos.files];
+      const photos = await Promise.all(files.map((file) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Your selected photos could not be read."));
+        reader.readAsDataURL(file);
+      })));
+      const orderId = reviewForm.dataset.orderId;
+      await request(`/api/account/orders/${encodeURIComponent(orderId)}/reviews`, {
         method: "POST",
         body: JSON.stringify({
+          productId: reviewForm.dataset.productId,
           rating: Number(reviewForm.elements.rating.value),
           reviewText: reviewForm.elements.reviewText.value,
-          photos: photos.map((photo) => photo.dataUrl)
-        })
+          photos
+        }),
+        headers: { "Content-Type": "application/json" }
       });
-      currentOrderDetail.reviewStatuses = {
-        ...(currentOrderDetail.reviewStatuses || {}),
-        [reviewForm.dataset.reviewProduct]: "pending"
-      };
-      renderOrderDetails(currentOrderDetail, false);
+      const [{ order }, { reviews }] = await Promise.all([
+        request(`/api/account/orders/${encodeURIComponent(orderId)}`),
+        request(`/api/account/orders/${encodeURIComponent(orderId)}/reviews`)
+      ]);
+      renderOrderDetails(order, reviews, false);
       showMessage("Review submitted – Awaiting approval");
     } catch (error) {
       showMessage(error.message, true);
-    } finally {
-      restore();
+      submitButton.disabled = false;
+      submitButton.textContent = originalLabel;
     }
     return;
   }
@@ -448,29 +478,6 @@ document.querySelector("#account-dashboard").addEventListener("submit", async (e
     showMessage("Your cancellation request was sent to the studio.");
     document.querySelector("#order-detail").hidden = true;
     showDashboard("orders");
-  } catch (error) {
-    showMessage(error.message, true);
-  }
-});
-
-document.querySelector("#account-dashboard").addEventListener("change", async (event) => {
-  const input = event.target.closest('.order-review-form input[name="photos"]');
-  if (!input) return;
-  const form = input.closest(".order-review-form");
-  const selected = [...input.files];
-  input.value = "";
-  const existing = reviewPhotosByForm.get(form) || [];
-  if (existing.length + selected.length > 5) {
-    showMessage("Choose up to five photos for each review.", true);
-    return;
-  }
-  if (selected.some((file) => !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024)) {
-    showMessage("Choose JPG, PNG, or WebP photos up to 5 MB each.", true);
-    return;
-  }
-  try {
-    reviewPhotosByForm.set(form, [...existing, ...await Promise.all(selected.map(readReviewPhoto))]);
-    renderReviewPhotoPreviews(form);
   } catch (error) {
     showMessage(error.message, true);
   }
@@ -527,8 +534,12 @@ window.setInterval(async () => {
     await refreshDashboard();
     const detail = document.querySelector("#order-detail");
     if (!detail.hidden && detail.dataset.orderId) {
-      const { order } = await request(`/api/account/orders/${encodeURIComponent(detail.dataset.orderId)}`);
-      renderOrderDetails(order, false);
+      const orderId = encodeURIComponent(detail.dataset.orderId);
+      const [{ order }, { reviews }] = await Promise.all([
+        request(`/api/account/orders/${orderId}`),
+        request(`/api/account/orders/${orderId}/reviews`)
+      ]);
+      renderOrderDetails(order, reviews, false);
     }
   } catch (error) {
     if (error.status === 401) {

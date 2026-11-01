@@ -255,45 +255,30 @@ async function showProduct(id) {
   const product = getProduct(id);
   const dialog = document.querySelector(".product-dialog");
   if (!product || !dialog) return;
+  let reviewData;
   try {
-    const reviewData = await loadProductReviews(product.id);
-    const summary = reviewData.summary || {};
-    const reviewCount = Number(summary.totalReviews || 0);
-    const averageRating = Number(summary.averageRating || 0);
-    const featuredCards = (reviewData.featuredReviews || []).slice(0, 2).map((review) => `
-      <article class="review-card">
-        <div class="review-card-head">
-          <strong>${escapeHtml(review.customerName || "Verified customer")}</strong>
-          <span aria-label="${Number(review.rating)} out of 5 stars">${"★".repeat(Number(review.rating))}</span>
-        </div>
-        <p>${escapeHtml(review.reviewText)}</p>
-        ${review.photos?.length ? `<div class="review-card-photos">${review.photos.map((photo) => `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText || "Customer product photo")}" loading="lazy">`).join("")}</div>` : ""}
-        <div class="review-card-meta"><span>Verified purchase</span><time datetime="${escapeHtml(review.createdAt)}">${escapeHtml(new Date(review.createdAt).toLocaleDateString("en-IN", { dateStyle: "medium" }))}</time></div>
-      </article>
-    `).join("") || '<p class="empty-review-copy">Be the first to share your experience.</p>';
-    dialog.querySelector(".dialog-content").innerHTML = `
-      <div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div>
-      <div class="dialog-product-copy">
-        <p class="eyebrow">${escapeHtml(product.category)} · made slowly</p>
-        <h2>${escapeHtml(product.name)}</h2>
-        <strong class="dialog-price">${formatPrice(product.price)}</strong>
-        <div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5 from ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}">
-          <span class="review-stars" aria-hidden="true">★★★★★</span>
-          <span class="review-count">${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span>
-        </div>
-        <p class="dialog-description">A little handmade happiness for your everyday. Carefully crocheted in a small batch, with the lovely details that make every piece feel like yours.</p>
-        <div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div>
-        <button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button>
-        <small>Made with love. Ships with care.</small>
-        <section class="featured-reviews" aria-labelledby="featured-reviews-heading">
-          <h3 id="featured-reviews-heading">Customer reviews</h3>
-          ${featuredCards}
-        </section>
-      </div>`;
-    dialog.showModal();
+    reviewData = await loadProductReviews(product.id);
   } catch (error) {
-    showToast(error.message || "Unable to load this product's reviews.");
+    showToast(error.message || "Unable to load product reviews.");
+    return;
   }
+  const summary = reviewData.summary || { totalReviews: 0, averageRating: 0 };
+  const reviewCount = Number(summary.totalReviews) || 0;
+  const averageRating = Number(summary.averageRating) || 0;
+  const featuredCards = (reviewData.featuredReviews || []).slice(0, 2).map((review) => {
+    const photos = (review.photos || []).map((photo) => `
+      <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText || "Customer product photo")}" loading="lazy">
+    `).join("");
+    const date = new Date(review.createdAt).toLocaleDateString("en-IN", { dateStyle: "medium" });
+    return `<article class="review-card">
+      <div class="review-card-head"><strong>${escapeHtml(review.customerName || "Verified customer")}</strong><span aria-label="${review.rating} out of 5 stars">${"★".repeat(Number(review.rating))}</span></div>
+      <p>${escapeHtml(review.reviewText)}</p>
+      ${photos ? `<div class="review-card-photos">${photos}</div>` : ""}
+      <div class="review-card-meta"><time datetime="${escapeHtml(new Date(review.createdAt).toISOString())}">${escapeHtml(date)}</time><span>Verified purchase</span></div>
+    </article>`;
+  }).join("") || '<p class="empty-review-copy">Be the first to share your experience.</p>';
+  dialog.querySelector(".dialog-content").innerHTML = `<div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div><div class="dialog-product-copy"><p class="eyebrow">${escapeHtml(product.category)} · made slowly</p><h2>${escapeHtml(product.name)}</h2><strong class="dialog-price">${formatPrice(product.price)}</strong><div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5, ${reviewCount} reviews"><span class="review-stars" aria-hidden="true">★★★★★</span><span>${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span></div><p>A little handmade happiness for your everyday. Carefully crocheted in a small batch, with the lovely details that make every piece feel like yours.</p><div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div><button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button><small>Made with love. Ships with care.</small><section class="featured-reviews" aria-label="Customer reviews"><h3>Customer reviews</h3>${featuredCards}</section></div>`;
+  dialog.showModal();
 }
 
 async function renderConfirmation() {

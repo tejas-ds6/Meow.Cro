@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS customer_sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE customer_sessions ADD COLUMN IF NOT EXISTS customer_email TEXT;
+
 CREATE INDEX IF NOT EXISTS customer_sessions_expiry_idx ON customer_sessions (expires_at);
 CREATE INDEX IF NOT EXISTS customer_sessions_customer_email_idx ON customer_sessions (customer_email);
 

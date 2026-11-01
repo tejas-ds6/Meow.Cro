@@ -57,7 +57,6 @@ function safeOrder(row) {
     paymentStatus: row.payment_status,
     paymentReference: row.payment_reference,
     status: row.order_status,
-    reviewStatuses: row.review_statuses || {},
     deliveryMethod: row.delivery_method,
     courierName: row.courier_name,
     trackingId: row.tracking_id,
@@ -85,11 +84,15 @@ function safeReview(row) {
   return {
     id: row.id,
     productId: row.product_id,
-    customerName: row.trusted_customer_name || row.customer_name || "Verified customer",
+    customerId: row.customer_id,
+    orderId: row.order_id,
+    customerName: row.customer_name,
     rating: Number(row.rating),
     reviewText: row.review_text,
     status: row.status,
     isFeatured: Boolean(row.is_featured),
+    adminNote: row.admin_note || "",
+    approvedAt: row.approved_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     photos: Array.isArray(row.photos) ? row.photos : []
@@ -450,8 +453,7 @@ export function createAccountService({ database, emailService, environment }) {
     const result = await database.query(
       `SELECT o.*, COALESCE(json_agg(json_build_object(
         'status', e.status, 'note', e.note, 'createdAt', e.created_at
-      ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events,
-      COALESCE((SELECT json_object_agg(pr.product_id, pr.status) FROM product_reviews pr WHERE pr.order_id = o.id), '{}'::json) AS review_statuses
+      ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events
        FROM orders o LEFT JOIN order_status_events e ON e.order_id = o.id
        WHERE o.id = $1 AND o.customer_id = $2 GROUP BY o.id`,
       [id, customerId]
@@ -464,8 +466,7 @@ export function createAccountService({ database, emailService, environment }) {
     const result = await database.query(
       `SELECT o.*, COALESCE(json_agg(json_build_object(
         'status', e.status, 'note', e.note, 'createdAt', e.created_at
-      ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events,
-      COALESCE((SELECT json_object_agg(pr.product_id, pr.status) FROM product_reviews pr WHERE pr.order_id = o.id), '{}'::json) AS review_statuses
+      ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events
        FROM orders o LEFT JOIN order_status_events e ON e.order_id = o.id
        WHERE o.id = $1 AND o.customer_email = LOWER($2) GROUP BY o.id`,
       [id, normalizedEmail]
@@ -546,31 +547,17 @@ export function createAccountService({ database, emailService, environment }) {
     return false;
   }
 
-  async function getEligibleDeliveredOrderForProduct(session, productId, orderId) {
-    const customerId = session?.customer_id || null;
-    const normalizedEmail = normalizeEmail(session?.customer_email || session?.email || null);
-    if (!productId || !orderId || (!customerId && !normalizedEmail)) return null;
-    const query = customerId
-      ? "SELECT id, customer_id, customer_email, name, items FROM orders WHERE id = $1 AND customer_id = $2 AND order_status = 'Delivered'"
-      : "SELECT id, customer_id, customer_email, name, items FROM orders WHERE id = $1 AND customer_email = LOWER($2) AND order_status = 'Delivered'";
-    const params = customerId ? [orderId, customerId] : [orderId, normalizedEmail];
-    const result = await database.query(query, params);
-    const order = result.rows[0];
-    if (!order || !Array.isArray(order.items) || !order.items.some((item) => String(item?.id ?? item?.productId ?? "") === String(productId))) return null;
-    return {
-      orderId: order.id,
-      customerId: order.customer_id,
-      customerEmail: order.customer_email,
-      customerName: order.name || null
-    };
-  }
-
-  async function hasProductReviewForOrderItem(orderId, productId) {
+  async function getEligibleDeliveredOrderForProduct(customerId, orderId, productId) {
+    if (!customerId || !orderId || !productId) return null;
     const result = await database.query(
-      "SELECT id FROM product_reviews WHERE order_id = $1 AND product_id = $2 LIMIT 1",
-      [orderId, productId]
+      "SELECT id, customer_id, name, items FROM orders WHERE id = $1 AND customer_id = $2 AND order_status = 'Delivered'",
+      [orderId, customerId]
     );
-    return Boolean(result.rows[0]);
+    const order = result.rows[0];
+    const hasProduct = Array.isArray(order?.items) && order.items.some(
+      (item) => String(item?.id ?? item?.productId ?? "") === String(productId)
+    );
+    return hasProduct ? { orderId: order.id, customerId: order.customer_id, customerName: order.name || null } : null;
   }
 
   async function getProductReviewSummary(productId) {
@@ -583,17 +570,17 @@ export function createAccountService({ database, emailService, environment }) {
         [productId]
       ),
       database.query(
-        `SELECT pr.*, COALESCE(json_agg(json_build_object(
+        `SELECT pr.rating, pr.review_text, pr.created_at, pr.approved_at, o.name AS order_customer_name,
+          COALESCE(json_agg(json_build_object(
           'id', prp.id,
           'url', prp.storage_reference,
           'altText', prp.alt_text,
           'sortOrder', prp.sort_order
-        ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos,
-        COALESCE(NULLIF(BTRIM(o.name), ''), 'Verified customer') AS trusted_customer_name
+        ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
          FROM product_reviews pr
          LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
-         LEFT JOIN orders o ON o.id = pr.order_id
-         WHERE pr.product_id = $1 AND pr.status = 'approved' AND pr.is_featured = TRUE AND pr.order_id IS NOT NULL
+         INNER JOIN orders o ON o.id = pr.order_id
+         WHERE pr.product_id = $1 AND pr.status = 'approved' AND pr.is_featured = TRUE
          GROUP BY pr.id, o.name
          ORDER BY pr.updated_at DESC
          LIMIT 2`,
@@ -610,89 +597,64 @@ export function createAccountService({ database, emailService, environment }) {
         totalReviews: approvedCount,
         averageRating: approvedCount ? Number(averageRating.toFixed(1)) : 0
       },
-      featuredReviews: featuredResult.rows.map((row) => safeReview(row))
+      featuredReviews: featuredResult.rows.map((row) => ({
+        customerName: String(row.order_customer_name || "").trim() || "Verified customer",
+        rating: Number(row.rating),
+        reviewText: row.review_text,
+        createdAt: row.created_at,
+        photos: Array.isArray(row.photos) ? row.photos : []
+      }))
     };
   }
 
-  async function submitProductReview({ productId, session, reviewText, rating, orderId, photos = [] }) {
+  async function listOrderReviews(customerId, orderId) {
+    const result = await database.query(
+      `SELECT pr.product_id, pr.status FROM product_reviews pr
+       JOIN orders o ON o.id = pr.order_id
+       WHERE o.id = $1 AND o.customer_id = $2`,
+      [orderId, customerId]
+    );
+    return result.rows.map((row) => ({ productId: row.product_id, status: row.status }));
+  }
+
+  async function submitProductReview({ productId, customerId, reviewText, rating, orderId, photos = [] }) {
     const normalizedProductId = String(productId || "").trim();
     const normalizedReview = String(reviewText || "").trim();
     const safeRating = Number(rating);
     if (!normalizedProductId) throw new Error("Choose a product to review.");
     if (!Number.isInteger(safeRating) || safeRating < 1 || safeRating > 5) throw new Error("Choose a rating between 1 and 5 stars.");
     if (normalizedReview.length < 8 || normalizedReview.length > 1000) throw new Error("Write a review between 8 and 1,000 characters.");
-    if (!Array.isArray(photos) || photos.length > 5) throw new Error("Choose up to five review photos.");
-
-    const customerId = session?.customer_id || null;
-    const normalizedEmail = normalizeEmail(session?.customer_email || session?.email || null);
-    if (!orderId || (!customerId && !normalizedEmail)) throw new Error("Only customers with a delivered order for this product can leave a review.");
-
-    const client = await database.connect();
-    try {
-      await client.query("BEGIN");
-      const orderResult = customerId
-        ? await client.query(
-          "SELECT id, customer_id, name, items FROM orders WHERE id = $1 AND customer_id = $2 AND order_status = 'Delivered' FOR UPDATE",
-          [orderId, customerId]
-        )
-        : await client.query(
-          "SELECT id, customer_id, name, items FROM orders WHERE id = $1 AND customer_email = LOWER($2) AND order_status = 'Delivered' FOR UPDATE",
-          [orderId, normalizedEmail]
-        );
-      const order = orderResult.rows[0];
-      if (!order || !Array.isArray(order.items) || !order.items.some((item) => String(item?.id ?? item?.productId ?? "") === normalizedProductId)) {
-        const error = new Error("This delivered order does not contain the selected product.");
-        error.code = "INELIGIBLE_REVIEW_ORDER";
-        throw error;
-      }
-
-      const duplicate = await client.query(
-        "SELECT id FROM product_reviews WHERE product_id = $1 AND order_id = $2 LIMIT 1",
-        [normalizedProductId, order.id]
-      );
-      if (duplicate.rows[0]) {
-        const error = new Error("You have already reviewed this item from that purchase.");
-        error.code = "DUPLICATE_ORDER_REVIEW";
-        throw error;
-      }
-
-      const result = await client.query(
-        `INSERT INTO product_reviews (id, product_id, customer_id, order_id, customer_name, rating, review_text, status, is_featured)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', FALSE)
-         RETURNING *`,
-        [
-          randomUUID(),
-          normalizedProductId,
-          customerId || order.customer_id || null,
-          order.id,
-          String(order.name || "").trim() || "Verified customer",
-          safeRating,
-          normalizedReview
-        ]
-      );
-      const review = result.rows[0];
-      for (const [index, photo] of photos.entries()) {
-        const storageReference = photo.url || photo.storageReference || "";
-        if (!storageReference) continue;
-        await client.query(
-          `INSERT INTO product_review_photos (id, review_id, storage_reference, alt_text, sort_order)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [randomUUID(), review.id, storageReference, photo.altText || `Customer review photo ${index + 1}`, index]
-        );
-      }
-      await client.query("COMMIT");
-      return safeReview(review);
-    } catch (error) {
-      await client.query("ROLLBACK");
-      if (error.code === "23505") {
-        const duplicateError = new Error("You have already reviewed this item from that purchase.");
-        duplicateError.code = "DUPLICATE_ORDER_REVIEW";
-        throw duplicateError;
-      }
+    const order = await getEligibleDeliveredOrderForProduct(customerId, orderId, normalizedProductId);
+    if (!order) {
+      const error = new Error("Only customers with a delivered order for this product can leave a review.");
+      error.status = 403;
       throw error;
-    } finally {
-      client.release();
     }
+
+    const reviewId = randomUUID();
+    const result = await database.query(
+      `INSERT INTO product_reviews (id, product_id, customer_id, order_id, customer_name, rating, review_text, status, is_featured)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', FALSE)
+       ON CONFLICT (product_id, customer_id, order_id) DO NOTHING
+       RETURNING *`,
+      [reviewId, normalizedProductId, customerId, order.orderId, order.customerName || "Verified customer", safeRating, normalizedReview]
+    );
+    const review = result.rows[0];
+    if (!review) {
+      const error = new Error("You have already reviewed this product from that purchase.");
+      error.status = 409;
+      throw error;
+    }
+    for (const [index, photo] of (photos || []).entries()) {
+      const storageReference = photo.url || photo.storageReference || "";
+      if (!storageReference) continue;
+      await database.query(
+        `INSERT INTO product_review_photos (id, review_id, storage_reference, alt_text, sort_order)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [randomUUID(), review.id, storageReference, photo.altText || `Customer review photo ${index + 1}`, index]
+      );
+    }
+    return safeReview(review);
   }
 
   async function listAdminReviews(status = null) {
@@ -704,13 +666,11 @@ export function createAccountService({ database, emailService, environment }) {
         'url', prp.storage_reference,
         'altText', prp.alt_text,
         'sortOrder', prp.sort_order
-      ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos,
-      COALESCE(NULLIF(BTRIM(o.name), ''), 'Verified customer') AS trusted_customer_name
+      ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
        FROM product_reviews pr
        LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
-       LEFT JOIN orders o ON o.id = pr.order_id
        ${clauses}
-       GROUP BY pr.id, o.name
+       GROUP BY pr.id
        ORDER BY pr.created_at DESC`,
       params
     );
@@ -729,20 +689,22 @@ export function createAccountService({ database, emailService, environment }) {
       const row = current.rows[0];
       const nextStatus = status || row.status;
       const nextFeatured = typeof isFeatured === "boolean" ? isFeatured : row.is_featured;
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [row.product_id]);
       if (nextStatus === "rejected") {
         await client.query(
           "UPDATE product_reviews SET status = 'rejected', admin_note = $1, is_featured = FALSE, updated_at = NOW() WHERE id = $2",
           [String(adminNote || row.admin_note || ""), reviewId]
         );
       } else if (nextStatus === "approved") {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [row.product_id]);
         const featuredCount = await client.query(
           "SELECT COUNT(*)::int AS count FROM product_reviews WHERE product_id = $1 AND status = 'approved' AND is_featured = TRUE AND id <> $2",
           [row.product_id, reviewId]
         );
         if (nextFeatured && featuredCount.rows[0].count >= 2) {
           await client.query("ROLLBACK");
-          throw new Error("Only two featured reviews can be active for a product.");
+          const error = new Error("Only two featured reviews can be active for a product at once.");
+          error.status = 409;
+          throw error;
         }
         await client.query(
           "UPDATE product_reviews SET status = 'approved', admin_note = $1, is_featured = $2, approved_at = COALESCE(approved_at, NOW()), updated_at = NOW() WHERE id = $3",
@@ -772,12 +734,10 @@ export function createAccountService({ database, emailService, environment }) {
         'altText', prp.alt_text,
         'sortOrder', prp.sort_order
       ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
-      , COALESCE(NULLIF(BTRIM(o.name), ''), 'Verified customer') AS trusted_customer_name
-      FROM product_reviews pr
-      LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
-      LEFT JOIN orders o ON o.id = pr.order_id
-      WHERE pr.id = $1
-      GROUP BY pr.id, o.name`,
+       FROM product_reviews pr
+       LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
+       WHERE pr.id = $1
+       GROUP BY pr.id`,
       [reviewId]
     );
     return result.rows[0] ? safeReview(result.rows[0]) : null;
@@ -985,8 +945,8 @@ export function createAccountService({ database, emailService, environment }) {
     requestCancellationByEmail,
     requestCancellationForSession,
     getEligibleDeliveredOrderForProduct,
-    hasProductReviewForOrderItem,
     getProductReviewSummary,
+    listOrderReviews,
     submitProductReview,
     listAdminReviews,
     updateReviewModeration,

@@ -123,50 +123,6 @@ function createOrderMemoryDatabase() {
   };
 }
 
-function createReviewMemoryDatabase(order) {
-  const reviews = [];
-  const photos = [];
-  return {
-    reviews,
-    photos,
-    async query(sql) {
-      throw new Error(`Unexpected direct review query: ${sql}`);
-    },
-    async connect() {
-      return {
-        async query(sql, values = []) {
-          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
-          if (sql.includes("FROM orders WHERE id = $1 AND customer_id = $2")) {
-            return {
-              rows: order.id === values[0] && order.customer_id === values[1] && order.order_status === "Delivered"
-                ? [order]
-                : []
-            };
-          }
-          if (sql.includes("SELECT id FROM product_reviews WHERE product_id = $1 AND order_id = $2")) {
-            return { rows: reviews.filter((review) => review.product_id === values[0] && review.order_id === values[1]).map(({ id }) => ({ id })) };
-          }
-          if (sql.includes("INSERT INTO product_reviews")) {
-            const [id, product_id, customer_id, order_id, customer_name, rating, review_text] = values;
-            const review = {
-              id, product_id, customer_id, order_id, customer_name, rating, review_text,
-              status: "pending", is_featured: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString()
-            };
-            reviews.push(review);
-            return { rows: [review] };
-          }
-          if (sql.includes("INSERT INTO product_review_photos")) {
-            photos.push(values);
-            return { rows: [] };
-          }
-          throw new Error(`Unexpected transaction review query: ${sql}`);
-        },
-        release() {}
-      };
-    }
-  };
-}
-
 test("customer account passwords are hashed and sessions are opaque, expiring server records", async () => {
   const database = createMemoryDatabase();
   const service = createAccountService({
@@ -320,51 +276,4 @@ test("NimbusPost orders are created once and booking details are saved to order 
   assert.equal(booked.nimbuspostLabelUrl, "https://labels.example.test/AWB123456789.pdf");
   assert.equal(repeat.trackingId, "AWB123456789");
   assert.equal(database.events.at(-1).status, "NimbusPost shipment booked");
-});
-
-test("product reviews are tied to the exact delivered order and use its trusted name", async () => {
-  const order = {
-    id: "order-review-1",
-    customer_id: "customer-1",
-    order_status: "Delivered",
-    name: "Trusted order name",
-    items: [{ id: "flower-keychain", name: "Daisy flower", qty: 1 }]
-  };
-  const database = createReviewMemoryDatabase(order);
-  const service = createAccountService({ database, emailService: {}, environment: {} });
-  const review = await service.submitProductReview({
-    productId: "flower-keychain",
-    session: { customer_id: order.customer_id },
-    orderId: order.id,
-    customerName: "Untrusted submitted name",
-    rating: 5,
-    reviewText: "A lovely handmade piece.",
-    photos: [{ url: "/uploads/reviews/photo.jpg", altText: "Customer photo" }]
-  });
-
-  assert.equal(review.customerName, "Trusted order name");
-  assert.equal(review.status, "pending");
-  assert.equal(review.orderId, undefined);
-  assert.equal(database.reviews[0].order_id, order.id);
-  assert.equal(database.photos.length, 1);
-  await assert.rejects(
-    service.submitProductReview({
-      productId: "flower-keychain",
-      session: { customer_id: order.customer_id },
-      orderId: order.id,
-      rating: 4,
-      reviewText: "Another review for this order."
-    }),
-    { code: "DUPLICATE_ORDER_REVIEW" }
-  );
-  await assert.rejects(
-    service.submitProductReview({
-      productId: "flower-keychain",
-      session: { customer_id: order.customer_id },
-      orderId: "different-order",
-      rating: 4,
-      reviewText: "A review for a different order."
-    }),
-    { code: "INELIGIBLE_REVIEW_ORDER" }
-  );
 });

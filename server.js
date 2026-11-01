@@ -129,13 +129,7 @@ app.use(["/api/account", "/api/admin", "/api/customer"], (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
 });
-const reviewSubmissionJson = express.json({ limit: "35mb" });
-app.use("/api/account/orders", (req, res, next) => {
-  if (req.method === "POST" && /^\/[^/]+\/items\/[^/]+\/review$/.test(req.path)) {
-    return reviewSubmissionJson(req, res, next);
-  }
-  next();
-});
+app.use("/api/account/orders/:id/reviews", express.json({ limit: "34mb" }));
 app.use("/api/account", express.json({ limit: "32kb" }));
 app.use("/api/admin", express.json({ limit: "32kb" }));
 app.use("/api/customer", express.json({ limit: "32kb" }));
@@ -180,13 +174,13 @@ function validateAddress(value) {
 
 function parseReviewPhotos(value) {
   if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new Error("Upload review photos as a list.");
-  if (value.length > 5) throw new Error("Choose up to five review photos.");
+  if (!Array.isArray(value)) throw new Error("Upload photos as a list of JPG, PNG, or WebP images.");
+  if (value.length > 5) throw new Error("Upload up to 5 photos.");
   const photos = [];
   for (const item of value) {
-    if (typeof item !== "string") throw new Error("Upload valid JPG, PNG, or WebP review photos.");
+    if (typeof item !== "string") throw new Error("Upload valid JPG, PNG, or WebP photos.");
     const attachment = photoAttachment(item);
-    if (!attachment) throw new Error("Upload valid JPG, PNG, or WebP review photos.");
+    if (!attachment) throw new Error("Upload valid JPG, PNG, or WebP photos.");
     photos.push({
       url: `data:${attachment.contentType};base64,${attachment.content.toString("base64")}`,
       altText: "Customer product photo"
@@ -488,19 +482,24 @@ async function persistReviewPhotos(photos) {
     });
   }));
 
-  app.post("/api/account/orders/:id/items/:productId/review", requireDatabase, requireCustomer, requireUuidParameter, asyncRoute(async (req, res) => {
-    const productId = text(req.params.productId, "Product ID", { max: 120 });
+  app.get("/api/account/orders/:id/reviews", requireDatabase, requireCustomer, requireUuidParameter, asyncRoute(async (req, res) => {
+    res.json({ reviews: await accountService.listOrderReviews(req.accountSession.customer_id, req.params.id) });
+  }));
+
+  app.post("/api/account/orders/:id/reviews", requireDatabase, requireCustomer, requireUuidParameter, asyncRoute(async (req, res) => {
+    const body = req.body || {};
+    const values = validateFields(() => ({
+      productId: text(body.productId, "Product", { max: 120 }),
+      rating: Number(body.rating),
+      reviewText: text(body.reviewText, "Review", { max: 1000 }),
+      photos: parseReviewPhotos(body.photos || [])
+    }), res);
+    if (!values) return;
+    const { productId } = values;
     if (!productsById.has(productId)) {
       res.status(404).json({ error: "This product could not be found." });
       return;
     }
-    const body = req.body || {};
-    const values = validateFields(() => ({
-      rating: Number(body.rating),
-      reviewText: text(body.reviewText, "Review", { max: 1000 }),
-      photos: parseReviewPhotos(body.photos)
-    }), res);
-    if (!values) return;
     if (values.reviewText.length < 8) {
       res.status(400).json({ error: "Write a review with at least 8 characters." });
       return;
@@ -509,36 +508,24 @@ async function persistReviewPhotos(photos) {
       res.status(400).json({ error: "Choose a rating between 1 and 5 stars." });
       return;
     }
-    if (!await accountService.getEligibleDeliveredOrderForProduct(req.accountSession, productId, req.params.id)) {
-      res.status(403).json({ error: "Reviews can only be submitted for this product in a delivered order." });
+    if (!await accountService.getEligibleDeliveredOrderForProduct(req.accountSession.customer_id, req.params.id, productId)) {
+      res.status(403).json({ error: "Only customers with a delivered order for this product can leave a review." });
       return;
     }
-    if (await accountService.hasProductReviewForOrderItem(req.params.id, productId)) {
-      res.status(409).json({ error: "You have already reviewed this item from that purchase." });
+    if ((await accountService.listOrderReviews(req.accountSession.customer_id, req.params.id))
+      .some((review) => review.productId === productId)) {
+      res.status(409).json({ error: "You have already reviewed this product from that purchase." });
       return;
     }
     const savedPhotos = await persistReviewPhotos(values.photos);
-    let review;
-    try {
-      review = await accountService.submitProductReview({
-        productId,
-        session: req.accountSession,
-        reviewText: values.reviewText,
-        rating: values.rating,
-        orderId: req.params.id,
-        photos: savedPhotos
-      });
-    } catch (error) {
-      if (error.code === "DUPLICATE_ORDER_REVIEW") {
-        res.status(409).json({ error: error.message });
-        return;
-      }
-      if (error.code === "INELIGIBLE_REVIEW_ORDER") {
-        res.status(403).json({ error: error.message });
-        return;
-      }
-      throw error;
-    }
+    const review = await accountService.submitProductReview({
+      productId,
+      customerId: req.accountSession.customer_id,
+      reviewText: values.reviewText,
+      rating: values.rating,
+      orderId: req.params.id,
+      photos: savedPhotos
+    });
     res.status(201).json({ review });
   }));
 
@@ -904,10 +891,13 @@ app.use(express.static(publicDir));
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   if (error.type === "entity.too.large") {
-    return res.status(413).json({ error: "The request is too large. Please upload a photo up to 5 MB." });
+    return res.status(413).json({ error: "The request is too large. Upload up to 5 photos, each up to 5 MB." });
   }
   if (error instanceof SyntaxError && "body" in error) {
     return res.status(400).json({ error: "The request body must be valid JSON." });
+  }
+  if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+    return res.status(error.status).json({ error: error.message });
   }
   console.error("Request failed:", error);
   return res.status(500).json({ error: "Something went wrong. Please try again." });
