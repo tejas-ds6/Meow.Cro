@@ -1,0 +1,27 @@
+# Meow.Cro — detailed reference
+
+> Meow.Cro is an independent crochet studio creating small-batch handmade accessories, floral pieces, plushies, and gifts.
+
+## The studio
+
+Meow.Cro is a small online storefront for handmade crochet creations. The collection includes accessories, keychains, floral bouquets, plushies, and home items. Pieces are made by hand in small batches; minor differences in color, shape, or stitch detail can occur.
+
+## Shopping and custom requests
+
+The [shop]({{SITE_ORIGIN}}/shop.html) is the authoritative source for the current catalogue, product descriptions, and prices. Product availability and prices may change. Customers can send an idea through the [custom orders page]({{SITE_ORIGIN}}/custom.html), but a request is not an accepted order until the studio confirms it.
+
+## Helpful pages
+
+- [Home]({{SITE_ORIGIN}}/)
+- [Shop the collection]({{SITE_ORIGIN}}/shop.html)
+- [Our story]({{SITE_ORIGIN}}/story.html)
+- [Frequently asked questions]({{SITE_ORIGIN}}/faq.html)
+- [Contact the studio]({{SITE_ORIGIN}}/contact.html)
+- [Shipping information]({{SITE_ORIGIN}}/shipping-policy.html)
+- [Returns and refunds]({{SITE_ORIGIN}}/returns-refunds.html)
+- [Privacy information]({{SITE_ORIGIN}}/privacy-policy.html)
+- [Terms and conditions]({{SITE_ORIGIN}}/terms.html)
+
+## Current catalogue
+
+The following catalogue entries are generated from the storefront's current product data whenever this file is requested. Prices are listed in Indian rupees (INR) and should be checked on the shop page before quoting.

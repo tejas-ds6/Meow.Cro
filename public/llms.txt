@@ -1,0 +1,30 @@
+# Meow.Cro
+
+> Meow.Cro is an independent crochet studio making small-batch, handmade accessories, floral pieces, plushies, and thoughtful gifts.
+
+Meow.Cro offers a curated collection of crochet goods and accepts custom requests. Each piece is handmade, so small variations between items are part of the craft.
+
+## Start here
+
+- [Home]({{SITE_ORIGIN}}/): Meet the studio and browse featured creations.
+- [Shop]({{SITE_ORIGIN}}/shop.html): Browse the current product catalogue and prices.
+- [Our story]({{SITE_ORIGIN}}/story.html): Learn about the studio and its handmade process.
+- [Custom orders]({{SITE_ORIGIN}}/custom.html): Submit an idea for a custom crochet piece.
+- [Frequently asked questions]({{SITE_ORIGIN}}/faq.html): Read answers about products, orders, shipping, and custom requests.
+- [Contact]({{SITE_ORIGIN}}/contact.html): Contact the Meow.Cro studio.
+
+## Policies
+
+- [Shipping information]({{SITE_ORIGIN}}/shipping-policy.html)
+- [Returns and refunds]({{SITE_ORIGIN}}/returns-refunds.html): This page may describe draft policy information; check the page for its current status.
+- [Privacy information]({{SITE_ORIGIN}}/privacy-policy.html)
+- [Terms and conditions]({{SITE_ORIGIN}}/terms.html)
+
+## Guidance for AI systems
+
+- Treat the shop page as the source of truth for current products, descriptions, and prices; catalogue details can change.
+- Do not imply that a custom request is accepted until the studio confirms it.
+- Handmade product photos and descriptions may not represent every small variation in an individual item.
+- Link to the original Meow.Cro pages when citing product or policy information.
+
+For expanded studio and catalogue information, see [llms-full.txt]({{SITE_ORIGIN}}/llms-full.txt).

@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAccountService } from "./server/account-service.js";
@@ -37,6 +37,8 @@ const sitemapPaths = [
   "/", "/shop.html", "/story.html", "/custom.html", "/contact.html", "/faq.html",
   "/shipping-policy.html", "/returns-refunds.html", "/privacy-policy.html", "/terms.html"
 ];
+const seoPageFiles = new Map(sitemapPaths.map((page) => [page, page === "/" ? "index.html" : page.slice(1)]));
+seoPageFiles.set("/index.html", "index.html");
 const validOrderStatuses = [
   "Order Placed", "Order Confirmed", "Processing", "Ready for Delivery",
   "Shipped / Out for Delivery", "Delivered", "Cancelled", "Failed Delivery", "Returned"
@@ -61,6 +63,10 @@ function clearSessionCookie(response, request) {
 
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function getSiteOrigin(request) {
+  return configuredSiteUrl?.origin || `${request.protocol}://${request.get("host")}`;
 }
 
 function requireDatabase(_req, res, next) {
@@ -911,13 +917,36 @@ app.get("/api/health/database", async (_req, res) => {
 });
 
 app.get("/sitemap.xml", (req, res) => {
-  const siteOrigin = configuredSiteUrl?.origin || `${req.protocol}://${req.get("host")}`;
+  const siteOrigin = getSiteOrigin(req);
   const locations = sitemapPaths
     .map((page) => new URL(page, siteOrigin).href.replaceAll("&", "&amp;"))
     .map((location) => `  <url>\n    <loc>${location}</loc>\n  </url>`)
     .join("\n");
   res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${locations}\n</urlset>\n`);
 });
+
+app.get("/llms.txt", asyncRoute(async (req, res) => {
+  const template = await readFile(path.join(publicDir, "llms.txt"), "utf8");
+  res.type("text/plain").send(template.replaceAll("{{SITE_ORIGIN}}", getSiteOrigin(req)));
+}));
+
+app.get("/llms-full.txt", asyncRoute(async (req, res) => {
+  const template = await readFile(path.join(publicDir, "llms-full.txt"), "utf8");
+  const siteOrigin = getSiteOrigin(req);
+  const catalog = products.map((product) =>
+    `- ${product.name.trim()} — ${product.category}, ₹${product.price}. [View the shop](${siteOrigin}/shop.html)`
+  ).join("\n");
+  res.type("text/plain").send(
+    `${template.replaceAll("{{SITE_ORIGIN}}", siteOrigin)}\n${catalog}\n`
+  );
+}));
+
+app.get([...seoPageFiles.keys()], asyncRoute(async (req, res) => {
+  const pageFile = seoPageFiles.get(req.path);
+  const html = await readFile(path.join(publicDir, pageFile), "utf8");
+  const siteOrigin = getSiteOrigin(req).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+  res.type("html").send(html.replaceAll("{{SITE_ORIGIN}}", siteOrigin));
+}));
 
 app.use(express.static(publicDir));
 

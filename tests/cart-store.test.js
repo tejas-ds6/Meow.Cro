@@ -83,7 +83,8 @@ test("cart storage failures are reported while the in-memory cart remains usable
 });
 
 test("image URLs add CDN parameters only to remote images", () => {
-  assert.equal(imageUrl("./Images/book marker.png"), "./Images/book marker.png");
+  assert.equal(imageUrl("./Images/book marker.png"), "./Images/optimized/book marker.jpg");
+  assert.equal(imageUrl("/Images/photo.jpeg"), "/Images/optimized/photo.jpg");
 
   const image = new URL(imageUrl("https://images.pexels.com/photo.jpeg?fit=crop", 180));
   assert.equal(image.searchParams.get("fit"), "crop");

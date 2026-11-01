@@ -40,6 +40,12 @@ if (productsById.size !== products.length) {
 
 export const getProduct = (id) => productsById.get(id);
 export const imageUrl = (url, width = 720) => {
+  if (url.startsWith("./Images/")) {
+    return url.replace("./Images/", "./Images/optimized/").replace(/\.[^.]+$/, ".jpg");
+  }
+  if (url.startsWith("/Images/")) {
+    return url.replace("/Images/", "/Images/optimized/").replace(/\.[^.]+$/, ".jpg");
+  }
   if (url.startsWith("./") || url.startsWith("/")) return url;
   const image = new URL(url);
   image.searchParams.set("auto", "compress");
