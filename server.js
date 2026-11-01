@@ -6,7 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAccountService } from "./server/account-service.js";
-import { databaseConfigured, initializeDatabase, isDatabaseReady, pool } from "./server/database.js";
+import { databaseConfigured, initializeDatabase, isDatabaseReady, logDatabaseError, pool } from "./server/database.js";
 import { createEmailService, emailConfigurationMessage } from "./server/email-service.js";
 import { sendPaidOrderEmails } from "./server/order-email.js";
 import { createNimbusPostService, NimbusPostError } from "./server/nimbuspost-service.js";
@@ -886,6 +886,22 @@ app.post("/api/payments/razorpay/confirm", express.json({ limit: "32kb" }), asyn
   }
 });
 
+app.get("/api/health/database", async (_req, res) => {
+  if (!databaseConfigured || !pool) {
+    res.status(503).json({ configured: false, connected: false, schemaReady: false });
+    return;
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    const schemaReady = isDatabaseReady();
+    res.status(schemaReady ? 200 : 503).json({ configured: true, connected: true, schemaReady });
+  } catch (error) {
+    logDatabaseError("health query", error);
+    res.status(503).json({ configured: true, connected: false, schemaReady: isDatabaseReady() });
+  }
+});
+
 app.use(express.static(publicDir));
 
 app.use((error, req, res, next) => {
@@ -906,11 +922,14 @@ app.use((error, req, res, next) => {
 app.get("/account", (_req, res) => res.redirect("/account.html"));
 app.get("/admin", (_req, res) => res.redirect("/admin.html"));
 
+console.info(`[database] DATABASE_URL configured: ${databaseConfigured ? "yes" : "no"}; Neon WebSocket transport; TLS certificate verification enabled.`);
+
 if (databaseConfigured) {
   try {
     await initializeDatabase();
   } catch (error) {
-    console.error("PostgreSQL initialization failed; customer account and order persistence APIs will remain unavailable:", error);
+    logDatabaseError("schema initialization", error);
+    console.error("PostgreSQL schema initialization failed; customer account and order persistence APIs will remain unavailable.");
   }
 } else {
   console.warn(accountDatabaseUnavailable);

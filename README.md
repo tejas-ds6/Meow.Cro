@@ -167,7 +167,7 @@ Never commit your real `.env` file or publish API keys, database URLs, payment s
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser. The server initializes the PostgreSQL schema on startup when `DATABASE_URL` is configured.
+Open [http://localhost:3000](http://localhost:3000) in your browser. The server initializes the PostgreSQL schema on startup when `DATABASE_URL` is configured. The local `.env` file is only for local development; production secrets must be set in the hosting provider's application environment.
 
 ### 5. Run checks
 
@@ -183,8 +183,7 @@ npm run build
 | Variable | Purpose |
 |---|---|
 | `PORT` | Port used by the Express server (defaults to `3000`) |
-| `DATABASE_URL` | PostgreSQL connection string; enables accounts and persistent order management |
-| `DATABASE_SSL` | Set to `true` when the database connection requires certificate verification |
+| `DATABASE_URL` | Required PostgreSQL connection string; use Neon’s pooled connection URL with `sslmode=require` |
 | `RAZORPAY_KEY_ID` | Razorpay public key ID for UPI checkout |
 | `RAZORPAY_KEY_SECRET` | Server-side Razorpay secret; keep private |
 | `RESEND_API_KEY` | Resend API key for outgoing email |
@@ -192,6 +191,19 @@ npm run build
 | `MAIL_TO` | Studio inbox that receives customer enquiries and order notifications |
 
 Some integrations are optional during local development. Features that depend on an unconfigured service will not be available until its environment variables are provided.
+
+### GoDaddy deployment with Neon
+
+Set these variables in the GoDaddy Node.js application's environment configuration (or the matching environment-variable settings for your GoDaddy hosting product). Do not rely on or upload the local `.env` file; it is intentionally excluded from deployment.
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | The Neon **pooled** connection string from the Neon dashboard. Keep it secret; it should use `sslmode=require`. |
+| `NODE_ENV` | `production` |
+
+Use the pooled URL for web requests, including its `-pooler` hostname when Neon provides one. The application uses one Neon serverless WebSocket pool over TLS with certificate verification, which retains the interactive transactions needed by account and order workflows while avoiding direct PostgreSQL TCP connections to port 5432. The HTTP-only Neon API is not used because those transactions require a persistent session. `DATABASE_SSL` is not needed; TLS certificate verification is enforced by the driver. The GoDaddy host must allow outbound secure WebSocket connections to Neon on port 443.
+
+After saving the variables, restart the Node.js application from GoDaddy's application controls. Then visit `https://<your-domain>/api/health/database`. A successful PostgreSQL query and schema initialization returns HTTP 200 with `{"configured":true,"connected":true,"schemaReady":true}`. This endpoint runs `SELECT 1` from the deployed application and does not expose connection details. If it returns HTTP 503, check the GoDaddy application logs; diagnostics report only the connection error code, syscall, and port, never the connection string or password. If WebSocket egress on port 443 is denied, ask GoDaddy to allow it for the application; the HTTP-only driver cannot safely replace this pool without rewriting the existing interactive transaction workflows.
 
 ## 🧪 Tests
 
