@@ -1,4 +1,4 @@
-import { getProduct, imageUrl, products } from "./catalog.js?v=flip-cards-20261103";
+import { getProduct, imageUrl, products } from "./catalog.js?v=full-fit-mobile-cards-20261103";
 import { createCartStore } from "./cart-store.js";
 
 const formatPrice = (amount) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
