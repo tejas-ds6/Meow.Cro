@@ -27,6 +27,12 @@ test("catalog product IDs are unique and resolve to the intended products", () =
   assert.equal(getProduct("sunflower-bookmark").name, "Sunflower Bookmark");
 });
 
+test("every catalog product has a distinct, product-specific description", () => {
+  const descriptions = products.map((product) => product.description.trim().toLowerCase());
+  assert.ok(descriptions.every((description) => description.length >= 40));
+  assert.equal(new Set(descriptions).size, products.length);
+});
+
 test("cart additions, quantity changes and totals remain consistent", () => {
   const { storage, store } = createStore();
 
