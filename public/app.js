@@ -1,4 +1,4 @@
-import { getProduct, imageUrl, products } from "./catalog.js?v=full-fit-mobile-cards-20261103";
+import { getProduct, imageUrl, products } from "./catalog.js?v=flat-products-20261104";
 import { createCartStore } from "./cart-store.js";
 
 const formatPrice = (amount) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
@@ -114,39 +114,12 @@ function renderProductCard(product, index) {
   const category = escapeHtml(product.category);
   const color = escapeHtml(product.color);
   const id = escapeHtml(product.id);
-  return `<article class="product-card reveal" style="--reveal-delay:${(index % 4) * 75}ms" data-product-card data-flipped="false">
-    <div class="product-card-perspective">
-      <div class="product-card-inner">
-        <div class="product-card-face product-card-front" aria-hidden="false">
-          <button class="product-card-flip-trigger" type="button" data-card-flip aria-pressed="false" aria-label="Show details for ${name}">
-            <span class="product-card-photo"><img src="${imageUrl(product.image)}" alt="${escapeHtml(product.alt)}" loading="lazy"><span class="product-card-category">${category}</span><span class="product-badge">${escapeHtml(product.label)}</span></span>
-            <span class="product-card-front-info"><span class="product-card-title">${name}</span><span class="product-card-front-meta"><span>${formatPrice(product.price)}</span><span>${color}</span></span><span class="product-card-flip-hint">Hover or tap to flip <span aria-hidden="true">↻</span></span></span>
-          </button>
-        </div>
-        <div class="product-card-face product-card-back" aria-hidden="true" inert>
-          <p class="eyebrow">${category} · made slowly</p>
-          <h3>${name}</h3>
-          <p class="product-card-description">${escapeHtml(product.description)}</p>
-          <ul class="product-card-highlights"><li>Handmade crochet</li><li>${color}</li><li>${category}</li></ul>
-          <div class="product-card-back-footer"><strong>${formatPrice(product.price)}</strong><div class="product-card-actions"><button class="button button-primary product-card-add" type="button" data-add="${id}" aria-label="Add ${name} to your bag">Add to bag <span>→</span></button><button class="button button-outline product-card-view" type="button" data-view="${id}">View product</button></div><button class="product-card-return" type="button" data-card-flip aria-pressed="true" aria-label="Show the image for ${name}">Turn card back <span aria-hidden="true">↻</span></button></div>
-        </div>
-      </div>
+  return `<article class="product-card reveal" style="--reveal-delay:${(index % 4) * 75}ms">
+    <div class="product-card-photo"><img src="${imageUrl(product.image)}" alt="${escapeHtml(product.alt)}" loading="lazy"><span class="product-card-category">${category}</span><span class="product-badge">${escapeHtml(product.label)}</span></div>
+    <div class="product-card-front-info"><h3 class="product-card-title">${name}</h3><div class="product-card-front-meta"><span>${formatPrice(product.price)}</span><span>${color}</span></div>
+      <div class="product-card-actions"><button class="button button-primary product-card-add" type="button" data-add="${id}" aria-label="Add ${name} to your bag">Add to bag <span>→</span></button><button class="button button-outline product-card-view" type="button" data-view="${id}">View details</button></div>
     </div>
   </article>`;
-}
-
-function updateProductCard(card) {
-  const showBack = card.dataset.flipped === "true" || card.dataset.hovered === "true";
-  card.classList.toggle("is-flipped", showBack);
-  const front = card.querySelector(".product-card-front");
-  const back = card.querySelector(".product-card-back");
-  front.setAttribute("aria-hidden", String(showBack));
-  back.setAttribute("aria-hidden", String(!showBack));
-  front.inert = showBack;
-  back.inert = !showBack;
-  card.querySelectorAll("[data-card-flip]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(showBack));
-  });
 }
 
 function observeReveals(root = document) {
@@ -306,44 +279,7 @@ async function showProduct(id) {
       <div class="review-card-meta"><time datetime="${escapeHtml(new Date(review.createdAt).toISOString())}">${escapeHtml(date)}</time><span>Verified purchase</span></div>
     </article>`;
   }).join("") || '<p class="empty-review-copy">Be the first to share your experience.</p>';
-  dialog.querySelector(".dialog-content").innerHTML = `<div class="dialog-card-viewport" tabindex="0" role="group" aria-label="Product card. Swipe left or press the right arrow for details." data-card-view="image"><div class="dialog-card-track"><div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div><div class="dialog-product-copy" aria-hidden="true"><p class="eyebrow">${escapeHtml(product.category)} · made slowly</p><h2>${escapeHtml(product.name)}</h2><strong class="dialog-price">${formatPrice(product.price)}</strong><div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5, ${reviewCount} reviews"><span class="review-stars" aria-hidden="true">★★★★★</span><span>${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span></div><p>${escapeHtml(product.description)}</p><div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div><section class="featured-reviews" aria-label="Customer reviews"><h3>Customer reviews</h3>${featuredCards}</section></div></div></div><div class="dialog-actions"><p class="dialog-swipe-hint" aria-live="polite">Swipe the card to get more details <span aria-hidden="true">→</span></p><button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button><small>Made with love. Ships with care.</small></div>`;
-  const card = dialog.querySelector(".dialog-card-viewport");
-  const track = dialog.querySelector(".dialog-card-track");
-  const hint = dialog.querySelector(".dialog-swipe-hint");
-  const setCardView = (showDetails) => {
-    card.dataset.cardView = showDetails ? "details" : "image";
-    card.setAttribute("aria-label", showDetails
-      ? "Product details. Swipe right or press the left arrow to return to the image."
-      : "Product image. Swipe left or press the right arrow for details.");
-    card.querySelector(".dialog-image").setAttribute("aria-hidden", String(showDetails));
-    card.querySelector(".dialog-product-copy").setAttribute("aria-hidden", String(!showDetails));
-    hint.innerHTML = showDetails
-      ? 'Swipe the card to see the image <span aria-hidden="true">←</span>'
-      : 'Swipe the card to get more details <span aria-hidden="true">→</span>';
-    track.classList.toggle("dialog-card-details", showDetails);
-  };
-  card.onpointerdown = (event) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    card.dataset.swipeStartX = String(event.clientX);
-    card.setPointerCapture(event.pointerId);
-  };
-  card.onpointerup = (event) => {
-    const startX = Number(card.dataset.swipeStartX);
-    if (Number.isFinite(startX) && Math.abs(event.clientX - startX) >= 45) {
-      setCardView(event.clientX < startX);
-    }
-    delete card.dataset.swipeStartX;
-  };
-  card.onpointercancel = () => delete card.dataset.swipeStartX;
-  card.onkeydown = (event) => {
-    if (event.key === "ArrowRight" && card.dataset.cardView !== "details") {
-      event.preventDefault();
-      setCardView(true);
-    } else if (event.key === "ArrowLeft" && card.dataset.cardView === "details") {
-      event.preventDefault();
-      setCardView(false);
-    }
-  };
+  dialog.querySelector(".dialog-content").innerHTML = `<div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div><div class="dialog-product-copy"><p class="eyebrow">${escapeHtml(product.category)} · made slowly</p><h2>${escapeHtml(product.name)}</h2><strong class="dialog-price">${formatPrice(product.price)}</strong><div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5, ${reviewCount} reviews"><span class="review-stars" aria-hidden="true">★★★★★</span><span>${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span></div><p>${escapeHtml(product.description)}</p><div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div><button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button><small>Made with love. Ships with care.</small><section class="featured-reviews" aria-label="Customer reviews"><h3>Customer reviews</h3>${featuredCards}</section></div>`;
   dialog.showModal();
 }
 
@@ -631,20 +567,6 @@ document.addEventListener("DOMContentLoaded", () => {
   observeReveals();
 
   document.addEventListener("click", (event) => {
-    const flip = event.target.closest("[data-card-flip]");
-    if (flip) {
-      const card = flip.closest("[data-product-card]");
-      if (card) {
-        const showBack = !card.classList.contains("is-flipped");
-        card.dataset.flipped = String(showBack);
-        if (!showBack) card.dataset.hovered = "false";
-        updateProductCard(card);
-        card.querySelector(card.classList.contains("is-flipped")
-          ? ".product-card-back [data-card-flip]"
-          : ".product-card-front [data-card-flip]")?.focus({ preventScroll: true });
-      }
-      return;
-    }
     const add = event.target.closest("[data-add]");
     if (add) {
       addToCart(add.dataset.add);
@@ -669,21 +591,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (event.target.closest(".bag-button")) openCart();
     if (event.target.closest(".drawer-close") || event.target.classList.contains("drawer-scrim")) closeCart();
     if (event.target.closest(".dialog-close")) document.querySelector(".product-dialog")?.close();
-  });
-
-  document.addEventListener("pointerover", (event) => {
-    if (event.pointerType !== "mouse") return;
-    const card = event.target.closest("[data-product-card]");
-    if (!card || card.contains(event.relatedTarget)) return;
-    card.dataset.hovered = "true";
-    updateProductCard(card);
-  });
-  document.addEventListener("pointerout", (event) => {
-    if (event.pointerType !== "mouse") return;
-    const card = event.target.closest("[data-product-card]");
-    if (!card || card.contains(event.relatedTarget)) return;
-    card.dataset.hovered = "false";
-    updateProductCard(card);
   });
 
   document.querySelector(".product-dialog")?.addEventListener("click", (event) => {
