@@ -115,10 +115,11 @@ function renderProductCard(product, index) {
   const color = escapeHtml(product.color);
   const id = escapeHtml(product.id);
   return `<article class="product-card reveal" style="--reveal-delay:${(index % 4) * 75}ms">
-    <div class="product-card-photo"><img src="${imageUrl(product.image)}" alt="${escapeHtml(product.alt)}" loading="lazy"><span class="product-card-category">${category}</span><span class="product-badge">${escapeHtml(product.label)}</span></div>
-    <div class="product-card-front-info"><h3 class="product-card-title">${name}</h3><div class="product-card-front-meta"><span>${formatPrice(product.price)}</span><span>${color}</span></div>
-      <div class="product-card-actions"><button class="button button-primary product-card-add" type="button" data-add="${id}" aria-label="Add ${name} to your bag">Add to bag <span>→</span></button><button class="button button-outline product-card-view" type="button" data-view="${id}">View details</button></div>
-    </div>
+    <button class="product-card-view" type="button" data-view="${id}" aria-label="View details for ${name}">
+      <span class="product-card-photo"><img src="${imageUrl(product.image)}" alt="${escapeHtml(product.alt)}" loading="lazy"><span class="product-card-category">${category}</span><span class="product-badge">${escapeHtml(product.label)}</span></span>
+      <span class="product-card-front-info"><span class="product-card-title">${name}</span><span class="product-card-front-meta"><span>${formatPrice(product.price)}</span><span>${color}</span></span></span>
+    </button>
+    <div class="product-card-actions"><button class="button button-primary product-card-add" type="button" data-add="${id}" aria-label="Add ${name} to your bag">Add to bag <span>→</span></button></div>
   </article>`;
 }
 
