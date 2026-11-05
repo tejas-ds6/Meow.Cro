@@ -881,37 +881,6 @@ app.post("/api/payments/razorpay/orders", requireDatabase, express.json({ limit:
   }
 });
 
-app.post("/api/orders", requireDatabase, express.json({ limit: "32kb" }), asyncRoute(async (req, res) => {
-  const values = validateFields(() => checkoutOrderValues(req.body, "COD"), res);
-  if (!values) return;
-  const idempotencyKey = req.get("Idempotency-Key") || "";
-  if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(idempotencyKey)) {
-    res.status(400).json({ error: "This checkout request is missing a valid idempotency reference." });
-    return;
-  }
-  try {
-    const order = await accountService.saveOrder(values, {
-      customerId: req.accountSession?.role === "customer" ? req.accountSession.customer_id : null,
-      paymentStatus: "Due on delivery",
-      idempotencyKey
-    });
-    const isReplay = order.number !== values.number;
-    let notificationSent = false;
-    if (!isReplay) {
-      const emailOrder = {
-        ...order,
-        trackingLink: `${getPublicSiteOrigin()}/account.html?order=${encodeURIComponent(order.id)}`,
-        supportLink: `${getPublicSiteOrigin()}/contact.html`
-      };
-      notificationSent = await sendPaidOrderEmails(emailOrder, emailService, process.env.MAIL_TO);
-    }
-    res.status(isReplay ? 200 : 201).json({ ok: true, order, notificationSent });
-  } catch (error) {
-    console.error("Cash on delivery order creation failed:", error);
-    res.status(502).json({ error: "We couldn't save your order right now. Please try again shortly." });
-  }
-}));
-
 app.post("/api/payments/razorpay/verify", express.json({ limit: "32kb" }), async (req, res) => {
   const details = req.body || {};
   try {

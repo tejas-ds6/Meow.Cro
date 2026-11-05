@@ -38,7 +38,7 @@ I built **Meow.Cro**, a full-stack e-commerce website designed around a small ha
 - **Product storefront** — browse a visual catalogue of crochet products with images, descriptions, categories, and prices.
 - **Search and discovery** — find products and explore the collection.
 - **Shopping cart** — add items, update quantities, remove products, and review the subtotal.
-- **Checkout** — submit delivery details and choose Cash on Delivery or UPI payment.
+- **Checkout** — submit delivery details and pay securely with UPI through Razorpay.
 - **Custom orders** — send a request for a personalised crochet creation.
 - **Customer accounts** — register, sign in, manage profile details and saved addresses, and view order history.
 - **Guest order access** — verify the checkout email with a one-time code to view every order placed with that address.
@@ -92,7 +92,7 @@ The result is a working, end-to-end storefront that gives the crochet business a
 
 - A central place to display and discover handmade products.
 - A clear path from browsing to cart and checkout.
-- Support for COD and server-verified Razorpay UPI payments.
+- Server-verified Razorpay UPI payments.
 - A custom-request path for customers who want something made personally.
 - Customer accounts, saved addresses, and order history.
 - A studio-side order desk for managing fulfilment and updates.

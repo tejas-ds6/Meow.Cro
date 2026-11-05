@@ -96,25 +96,6 @@ async function postJson(endpoint, values, headers = {}) {
   return result;
 }
 
-function getCodCheckoutKey(items) {
-  const storageKey = "meowcro-cod-checkout";
-  const fingerprint = JSON.stringify(items.map(({ id, qty }) => ({ id, qty })));
-  let pending;
-  try {
-    pending = JSON.parse(sessionStorage.getItem(storageKey) || "null");
-  } catch (error) {
-    console.error("Unable to read the pending cash-on-delivery request reference.", error);
-  }
-  if (pending?.fingerprint === fingerprint && /^[\da-f-]{36}$/i.test(pending.key || "")) return pending.key;
-  const key = crypto.randomUUID();
-  try {
-    sessionStorage.setItem(storageKey, JSON.stringify({ fingerprint, key }));
-  } catch (error) {
-    console.error("Unable to save the pending cash-on-delivery request reference.", error);
-  }
-  return key;
-}
-
 const postEmail = postJson;
 
 function loadRazorpayCheckout() {
@@ -390,12 +371,7 @@ function initializeShop() {
 
 function initializeCheckout() {
   const form = document.querySelector("#checkout-form");
-  const paymentChoices = [...(form?.querySelectorAll('input[name="payment"]') || [])];
   const submitButton = form?.querySelector('[type="submit"]');
-  paymentChoices.forEach((choice) => choice.addEventListener("change", () => {
-    paymentChoices.forEach((option) => option.closest(".payment-choice")?.classList.toggle("payment-choice-selected", option.checked));
-    if (submitButton) submitButton.innerHTML = choice.value === "COD" ? "Place COD order <span>→</span>" : "Pay with UPI <span>→</span>";
-  }));
   if (form) {
     fetch("/api/account/me")
       .then(async (response) => response.ok ? response.json() : null)
@@ -416,46 +392,7 @@ function initializeCheckout() {
     }
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form).entries());
-    values.payment = form.elements.payment.value;
     const originalButtonText = submitButton.innerHTML;
-
-    if (values.payment === "COD") {
-      submitButton.disabled = true;
-      submitButton.textContent = "Saving your order…";
-      const items = cartStore.items.map(({ id, qty }) => ({ id, qty }));
-      try {
-        const result = await postJson("/api/orders", { ...values, items }, {
-          "Idempotency-Key": getCodCheckoutKey(items)
-        });
-        const order = { ...result.order, notificationSent: result.notificationSent };
-        try {
-          localStorage.setItem(orderStorageKey, JSON.stringify(order));
-        } catch (error) {
-          console.error("Unable to save the cash-on-delivery order receipt.", error);
-          cartStore.clear();
-          window.location.assign(`account.html?order=${encodeURIComponent(order.id)}`);
-          return;
-        }
-        try {
-          sessionStorage.removeItem("meowcro-cod-checkout");
-        } catch (error) {
-          console.error("Unable to clear the completed cash-on-delivery request reference.", error);
-        }
-        try {
-          cartStore.clear();
-        } catch (error) {
-          console.error("Unable to clear your bag after order confirmation.", error);
-        }
-        window.location.assign("confirmation.html");
-      } catch (error) {
-        console.error("Unable to save the cash-on-delivery order.", error);
-        showToast(error.message);
-        submitButton.disabled = false;
-        submitButton.innerHTML = originalButtonText;
-      }
-      return;
-    }
-
     submitButton.disabled = true;
     submitButton.textContent = "Opening secure payment…";
     let paymentCallbackReceived = false;
