@@ -50,13 +50,16 @@ function createOrderMemoryDatabase() {
   function recordOrder(values) {
     const [
       id, number, customer_id, customer_email, name, phone, address, city, pin, note, items,
-      subtotal, shipping, total, payment_method, payment_status, razorpay_order_id
+      subtotal, shipping, total, payment_method, payment_status, razorpay_order_id, checkout_key
     ] = values;
+    if (checkout_key && [...orders.values()].some((order) => order.checkout_key === checkout_key)) {
+      return { rows: [] };
+    }
     const now = new Date().toISOString();
     const order = {
-      id, number, customer_id, customer_email: customer_email.toLowerCase(), name, phone, address, city, pin, note,
+      id, number, customer_id, customer_email: customer_email.trim().toLowerCase(), name, phone, address, city, pin, note,
       items: JSON.parse(items), subtotal, shipping, discount: 0, total, payment_method, payment_status,
-      payment_reference: null, razorpay_order_id, order_status: "Order Placed", created_at: now, updated_at: now,
+      payment_reference: null, razorpay_order_id, checkout_key, order_status: "Order Placed", created_at: now, updated_at: now,
       delivery_method: null, courier_name: null, tracking_id: null, tracking_url: null, courier_status: null,
       estimated_delivery: null, cancellation_requested: false, cancellation_request_status: null
     };
@@ -83,6 +86,16 @@ function createOrderMemoryDatabase() {
         const order = orders.get(values[0]);
         return { rows: order ? [order] : [] };
       }
+      if (sql.includes("LOWER(BTRIM(customer_email))")) {
+        const email = String(values[0]).trim().toLowerCase();
+        return { rows: [...orders.values()].filter((order) => order.customer_email.trim().toLowerCase() === email) };
+      }
+      if (sql.includes("FROM orders o LEFT JOIN order_status_events")) {
+        const [id, email] = values;
+        const order = [...orders.values()].find((item) =>
+          item.id === id && item.customer_email.trim().toLowerCase() === String(email).toLowerCase());
+        return { rows: order ? [{ ...order, events: events.filter((event) => event.order_id === order.id) }] : [] };
+      }
       if (sql.includes("SELECT * FROM orders WHERE id = $1")) {
         const order = [...orders.values()].find((item) => item.id === values[0]);
         return { rows: order ? [order] : [] };
@@ -94,6 +107,10 @@ function createOrderMemoryDatabase() {
         async query(sql, values = []) {
           if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] };
           if (sql.includes("INSERT INTO orders")) return recordOrder(values);
+          if (sql.includes("SELECT * FROM orders WHERE checkout_key = $1")) {
+            const order = [...orders.values()].find((item) => item.checkout_key === values[0]);
+            return { rows: order ? [order] : [] };
+          }
           if (sql.includes("INSERT INTO order_status_events")) return recordEvent(values);
           if (sql.includes("SELECT * FROM orders WHERE id = $1 FOR UPDATE")) {
             const order = [...orders.values()].find((item) => item.id === values[0]);
@@ -122,6 +139,104 @@ function createOrderMemoryDatabase() {
     }
   };
 }
+
+function createOtpMemoryDatabase() {
+  const challenges = [];
+  const sessions = new Map();
+  return {
+    challenges,
+    sessions,
+    async query(sql, values = []) {
+      if (sql.includes("UPDATE customer_email_otp_tokens SET used_at = NOW() WHERE email = $1")) {
+        for (const challenge of challenges) {
+          if (challenge.email === values[0] && !challenge.used_at && challenge.expires_at > new Date()) {
+            challenge.used_at = new Date();
+          }
+        }
+        return { rows: [] };
+      }
+      if (sql.includes("INSERT INTO customer_email_otp_tokens")) {
+        const [id, email, otp_hash, expires_at] = values;
+        challenges.push({ id, email, otp_hash, attempts: 0, expires_at, used_at: null, created_at: new Date() });
+        return { rows: [] };
+      }
+      if (sql.includes("FROM customer_email_otp_tokens") && sql.includes("ORDER BY created_at DESC")) {
+        const challenge = [...challenges].reverse().find((item) =>
+          item.email === values[0] && item.expires_at > new Date() && !item.used_at);
+        return { rows: challenge ? [challenge] : [] };
+      }
+      if (sql.includes("UPDATE customer_email_otp_tokens SET attempts = $1")) {
+        const challenge = challenges.find((item) => item.id === values[1]);
+        if (challenge) challenge.attempts = values[0];
+        return { rows: [] };
+      }
+      if (sql.includes("UPDATE customer_email_otp_tokens SET used_at = NOW() WHERE id = $1")) {
+        const challenge = challenges.find((item) => item.id === values[0]);
+        if (challenge) challenge.used_at = new Date();
+        return { rows: [] };
+      }
+      if (sql.includes("INSERT INTO customer_sessions")) {
+        const [token_hash, customer_id, role, expires_at, customer_email] = values;
+        sessions.set(token_hash, { token_hash, customer_id, role, expires_at, customer_email });
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected SQL in OTP test: ${sql}`);
+    }
+  };
+}
+
+test("email OTP is cryptographically generated, hashed, expiring, and creates a scoped email session", async () => {
+  const database = createOtpMemoryDatabase();
+  const messages = [];
+  const service = createAccountService({
+    database,
+    emailService: { send: async (message) => { messages.push(message); return { id: "email_test" }; } },
+    environment: { OTP_SECRET: "a-secure-otp-hmac-secret-that-is-at-least-32-characters" }
+  });
+
+  const challenge = await service.requestEmailOtp(" Buyer@Example.test ");
+  assert.equal(challenge.email, "buyer@example.test");
+  assert.equal("otp" in challenge, false);
+  assert.equal(database.challenges[0].email, "buyer@example.test");
+  assert.notEqual(database.challenges[0].otp_hash, messages[0].text.match(/\d{6}/)[0]);
+  const otp = messages[0].text.match(/\b(\d{6})\b/)[1];
+  const incorrectOtp = otp === "000001" ? "000002" : "000001";
+  const rejected = await service.verifyEmailOtp("BUYER@example.test", incorrectOtp);
+  assert.equal(rejected.ok, false);
+
+  const verified = await service.verifyEmailOtp(" Buyer@example.test ", otp);
+  assert.equal(verified.ok, true);
+  assert.equal(verified.customer.email, "buyer@example.test");
+  assert.equal(database.challenges[0].used_at instanceof Date, true);
+  const session = [...database.sessions.values()][0];
+  assert.equal(session.customer_id, null);
+  assert.equal(session.customer_email, "buyer@example.test");
+});
+
+test("email OTP attempts are limited and expired codes cannot authenticate", async () => {
+  const database = createOtpMemoryDatabase();
+  const messages = [];
+  const service = createAccountService({
+    database,
+    emailService: { send: async (message) => { messages.push(message); return { id: "email_test" }; } },
+    environment: { OTP_SECRET: "a-secure-otp-hmac-secret-that-is-at-least-32-characters" }
+  });
+
+  await service.requestEmailOtp("buyer@example.test");
+  const code = messages[0].text.match(/\b(\d{6})\b/)[1];
+  const wrongCode = code === "999999" ? "999998" : "999999";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const invalid = await service.verifyEmailOtp("buyer@example.test", wrongCode);
+    assert.equal(invalid.ok, false);
+  }
+  const locked = await service.verifyEmailOtp("buyer@example.test", code);
+  assert.equal(locked.locked, true);
+  assert.equal(database.sessions.size, 0);
+
+  await service.requestEmailOtp("buyer@example.test");
+  database.challenges.at(-1).expires_at = new Date(Date.now() - 1);
+  assert.equal(await service.verifyEmailOtp("buyer@example.test", messages[1].text.match(/\b(\d{6})\b/)[1]), null);
+});
 
 test("customer account passwords are hashed and sessions are opaque, expiring server records", async () => {
   const database = createMemoryDatabase();
@@ -184,7 +299,7 @@ test("UPI order details are stored and payment verification updates the persiste
   const order = {
     number: "MC-TEST-ORDER",
     name: "Test buyer",
-    email: "buyer@example.test",
+    email: " Buyer@Example.Test ",
     phone: "+91 98765 43210",
     address: "1 Test Street",
     city: "Test City",
@@ -203,13 +318,17 @@ test("UPI order details are stored and payment verification updates the persiste
   });
 
   assert.equal(saved.number, order.number);
-  assert.equal(saved.email, order.email);
+  assert.equal(saved.email, "buyer@example.test");
+  assert.equal(database.orders.get(order.number).customer_email, "buyer@example.test");
   assert.equal(saved.paymentMethod, "UPI");
   assert.equal(saved.paymentStatus, "Pending");
   assert.equal(saved.total, order.total);
   assert.deepEqual(saved.items, order.items);
   assert.equal(database.orders.get(order.number).razorpay_order_id, "order_test_123");
   assert.equal(database.events[0].status, "Order Placed");
+  assert.equal((await service.listCustomerOrdersByEmail(" BUYER@example.test ")).length, 1);
+  assert.equal((await service.getOrderForSession({ customer_email: "buyer@example.test" }, saved.id)).id, saved.id);
+  assert.equal(await service.getOrderForSession({ customer_email: "another@example.test" }, saved.id), null);
 
   const paid = await service.updatePayment(order.number, "Paid", "pay_test_456");
 
@@ -217,6 +336,43 @@ test("UPI order details are stored and payment verification updates the persiste
   assert.equal(paid.paymentReference, "pay_test_456");
   assert.equal(paid.status, "Order Confirmed");
   assert.equal(database.events[1].status, "Order Confirmed");
+});
+
+test("cash-on-delivery order creation is idempotent and preserves the original order", async () => {
+  const database = createOrderMemoryDatabase();
+  const service = createAccountService({
+    database,
+    emailService: { send: async () => ({ id: "email_test" }) },
+    environment: {}
+  });
+  const order = {
+    number: "MC-COD-ORIGINAL",
+    name: "Test buyer",
+    email: " Buyer@Example.Test ",
+    phone: "9876543210",
+    address: "1 Test Street",
+    city: "Test City",
+    pin: "123456",
+    items: [{ id: "flower-keychain", name: "Flower keychain", qty: 1, unitPrice: 250 }],
+    subtotal: 250,
+    shipping: 29,
+    total: 279,
+    payment: "COD"
+  };
+  const idempotencyKey = "00000000-0000-4000-8000-000000000002";
+  const first = await service.saveOrder(order, { paymentStatus: "Due on delivery", idempotencyKey });
+  const replay = await service.saveOrder({ ...order, number: "MC-COD-RETRY", name: "Changed retry" }, {
+    paymentStatus: "Due on delivery",
+    idempotencyKey
+  });
+
+  assert.equal(first.id, replay.id);
+  assert.equal(replay.number, "MC-COD-ORIGINAL");
+  assert.equal(replay.name, "Test buyer");
+  assert.equal(replay.paymentMethod, "COD");
+  assert.equal(replay.paymentStatus, "Due on delivery");
+  assert.equal(database.orders.size, 1);
+  assert.equal(database.events.length, 1);
 });
 
 test("NimbusPost orders are created once and booking details are saved to order tracking", async () => {

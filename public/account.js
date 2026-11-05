@@ -1,7 +1,7 @@
 const accountMessage = document.querySelector("#account-message");
 const authPanel = document.querySelector("#account-auth");
 const dashboard = document.querySelector("#account-dashboard");
-const authForms = ["login", "register", "forgot", "reset"].map((name) => document.querySelector(`#${name}-form`));
+const authForms = ["login", "register", "forgot", "reset", "email"].map((name) => document.querySelector(`#${name}-form`));
 let accountData;
 let orders = [];
 
@@ -50,7 +50,9 @@ function showAuth(view) {
 function showDashboard(view = "orders") {
   authPanel.hidden = true;
   dashboard.hidden = false;
+  const emailOnlySession = !accountData?.customer?.id;
   document.querySelectorAll("[data-account-view]").forEach((button) => {
+    button.hidden = emailOnlySession && button.dataset.accountView !== "orders";
     button.classList.toggle("active", button.dataset.accountView === view);
   });
   document.querySelectorAll("[data-account-panel]").forEach((panel) => {
@@ -69,7 +71,7 @@ function renderOrders() {
     return `<article class="account-card order-card">
       <div class="order-card-top"><div><p class="eyebrow">${escapeHtml(new Date(order.createdAt).toLocaleDateString("en-IN", { dateStyle: "medium" }))}</p><h3>Order ${escapeHtml(order.number)}</h3></div><span class="status-pill">${escapeHtml(order.status)}</span></div>
       <div class="order-card-content">${firstItem?.image ? `<img src="${escapeHtml(firstItem.image)}" alt="" loading="lazy">` : '<span class="order-image-placeholder">✿</span>'}<div><strong>${escapeHtml(firstItem?.name || "Your order")}${order.items.length > 1 ? ` + ${order.items.length - 1} more` : ""}</strong><small>${order.items.reduce((sum, item) => sum + item.qty, 0)} item(s) · ${escapeHtml(order.paymentMethod)}</small></div><strong class="order-card-price">${price(order.total)}</strong></div>
-      <div class="order-card-bottom"><p>Payment: <strong>${escapeHtml(order.paymentStatus)}</strong></p><button class="button button-outline" type="button" data-order-view="${escapeHtml(order.id)}">View details <span>→</span></button></div>
+      <div class="order-card-bottom"><p>Payment: <strong>${escapeHtml(order.paymentStatus)}</strong></p><div class="order-card-actions"><button class="button button-outline" type="button" data-order-view="${escapeHtml(order.id)}">View details</button><button class="button button-primary" type="button" data-order-view="${escapeHtml(order.id)}">Track order <span>→</span></button></div></div>
     </article>`;
   }).join("");
 }
@@ -97,7 +99,7 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
           : reviewStatus === "rejected"
             ? "Review not approved"
             : "";
-      const reviewAction = order.status === "Delivered"
+      const reviewAction = accountData?.customer?.id && order.status === "Delivered"
         ? reviewStatus
           ? `<p class="order-review-status">${reviewMessage}</p>`
           : `<button class="account-text-button" type="button" data-write-review="${escapeHtml(productId)}">Write a review</button>
@@ -120,7 +122,7 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
 }
 
 function renderProfile() {
-  document.querySelector("#account-name").textContent = accountData.customer.name;
+  document.querySelector("#account-name").textContent = accountData.customer.name || "there";
   const profileForm = document.querySelector("#profile-form");
   profileForm.elements.name.value = accountData.customer.name;
   profileForm.elements.email.value = accountData.customer.email;
@@ -166,6 +168,28 @@ async function refreshDashboard() {
   renderOrders();
 }
 
+async function openOrder(orderId) {
+  const [{ order }, { reviews }] = await Promise.all([
+    request(`/api/account/orders/${encodeURIComponent(orderId)}`),
+    request(`/api/account/orders/${encodeURIComponent(orderId)}/reviews`)
+  ]);
+  renderOrderDetails(order, reviews);
+}
+
+async function openRequestedOrder() {
+  const orderId = new URLSearchParams(location.search).get("order");
+  if (!orderId) return;
+  if (!orders.some((order) => order.id === orderId)) {
+    showMessage("That order isn’t available in this verified email history.", true);
+    return;
+  }
+  try {
+    await openOrder(orderId);
+  } catch (error) {
+    showMessage(error.message, true);
+  }
+}
+
 function setFormBusy(form, busy, label) {
   const button = form.querySelector('[type="submit"]');
   if (!button) return () => {};
@@ -194,12 +218,7 @@ document.addEventListener("click", async (event) => {
   const viewOrder = event.target.closest("[data-order-view]");
   if (viewOrder) {
     try {
-      const orderId = encodeURIComponent(viewOrder.dataset.orderView);
-      const [{ order }, { reviews }] = await Promise.all([
-        request(`/api/account/orders/${orderId}`),
-        request(`/api/account/orders/${orderId}/reviews`)
-      ]);
-      renderOrderDetails(order, reviews);
+      await openOrder(viewOrder.dataset.orderView);
     } catch (error) {
       showMessage(error.message, true);
     }
@@ -253,6 +272,54 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+document.querySelector("#send-order-code").addEventListener("click", async (event) => {
+  const form = document.querySelector("#email-form");
+  const email = form.elements.email.value;
+  if (!form.elements.email.reportValidity()) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Sending your code…";
+  try {
+    await request("/api/account/otp/send", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+    document.querySelector("#order-code-field").hidden = false;
+    document.querySelector("#verify-order-code").hidden = false;
+    form.elements.otp.focus();
+    showMessage("If the email can receive messages, a verification code is on its way.");
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send another code";
+  }
+});
+
+document.querySelector("#email-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  const restore = setFormBusy(form, true, "Checking your code…");
+  try {
+    await request("/api/account/otp/verify", {
+      method: "POST",
+      body: JSON.stringify({ email: form.elements.email.value, otp: form.elements.otp.value })
+    });
+    await refreshDashboard();
+    showDashboard("orders");
+    form.reset();
+    document.querySelector("#order-code-field").hidden = true;
+    document.querySelector("#verify-order-code").hidden = true;
+    showMessage("Your email is verified. Here are the orders linked to it.");
+    await openRequestedOrder();
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    restore();
+  }
+});
+
 document.querySelector("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -266,6 +333,7 @@ document.querySelector("#login-form").addEventListener("submit", async (event) =
     showDashboard("orders");
     showMessage("You’re signed in. Your little account is ready.");
     form.reset();
+    await openRequestedOrder();
   } catch (error) {
     showMessage(error.message, true);
   } finally {
@@ -295,6 +363,7 @@ document.querySelector("#register-form").addEventListener("submit", async (event
     showDashboard("orders");
     showMessage("Your account is ready. Welcome to Meow.Cro!");
     form.reset();
+    await openRequestedOrder();
   } catch (error) {
     showMessage(error.message, true);
   } finally {
@@ -515,6 +584,7 @@ if (resetToken) {
       renderOrders();
       showDashboard("orders");
       showMessage("");
+      await openRequestedOrder();
     })
     .catch((error) => {
       if (error.status === 401) {

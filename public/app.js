@@ -68,12 +68,12 @@ function initializeEmailForm(selector, endpoint, successMessage, getValues = (fo
   });
 }
 
-async function postJson(endpoint, values) {
+async function postJson(endpoint, values, headers = {}) {
   let response;
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      headers: { "Content-Type": "application/json", "Accept": "application/json", ...headers },
       body: JSON.stringify(values)
     });
   } catch {
@@ -94,6 +94,25 @@ async function postJson(endpoint, values) {
   }
   if (!response.ok) throw new Error(result.error || "We couldn't complete that just now. Please try again.");
   return result;
+}
+
+function getCodCheckoutKey(items) {
+  const storageKey = "meowcro-cod-checkout";
+  const fingerprint = JSON.stringify(items.map(({ id, qty }) => ({ id, qty })));
+  let pending;
+  try {
+    pending = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+  } catch (error) {
+    console.error("Unable to read the pending cash-on-delivery request reference.", error);
+  }
+  if (pending?.fingerprint === fingerprint && /^[\da-f-]{36}$/i.test(pending.key || "")) return pending.key;
+  const key = crypto.randomUUID();
+  try {
+    sessionStorage.setItem(storageKey, JSON.stringify({ fingerprint, key }));
+  } catch (error) {
+    console.error("Unable to save the pending cash-on-delivery request reference.", error);
+  }
+  return key;
 }
 
 const postEmail = postJson;
@@ -295,7 +314,7 @@ async function renderConfirmation() {
     }
     try {
       const verified = await postJson("/api/payments/razorpay/confirm", order.paymentProof);
-      order = { ...verified.order, notificationSent: order.notificationSent };
+      order = { ...verified.order, notificationSent: order.notificationSent, paymentProof: order.paymentProof };
       try {
         localStorage.setItem(orderStorageKey, JSON.stringify(order));
       } catch (error) {
@@ -311,7 +330,9 @@ async function renderConfirmation() {
     card.innerHTML = `<div class="confirmation-flower">✿</div><p class="eyebrow">A little mix-up</p><h1>No order <em>just yet.</em></h1><p class="confirmation-lede">We couldn't find an order in this browser. Your bag is still here if you'd like to pick up where you left off.</p><a class="button button-primary" href="shop.html">Visit the little shop <span>→</span></a>`;
     return;
   }
-  if (order.payment !== "UPI (paid)") {
+  const paymentVerified = order.payment === "UPI (paid)" || order.paymentStatus === "Paid";
+  const codAccepted = order.paymentMethod === "COD" && Boolean(order.id) && order.status === "Order Placed";
+  if (!paymentVerified && !codAccepted) {
     showUnverifiedConfirmation(card);
     return;
   }
@@ -324,13 +345,26 @@ async function renderConfirmation() {
   lede.replaceChildren(document.createTextNode("Thank you, "), document.createElement("strong"), document.createTextNode("! Your order has been placed."));
   lede.querySelector("strong").textContent = order.name;
   card.querySelector(".order-number").textContent = order.number;
+  card.querySelector(".confirmation-date").textContent = new Date(order.createdAt || Date.now()).toLocaleDateString("en-IN", { dateStyle: "medium" });
+  card.querySelector(".confirmation-email").textContent = order.email || "";
   card.querySelector(".confirmation-address").textContent = `${order.address}, ${order.city} ${order.pin}`;
-  card.querySelector(".confirmation-payment").textContent = order.payment;
+  card.querySelector(".confirmation-payment").textContent = order.paymentMethod || "UPI";
+  card.querySelector(".confirmation-payment-status").textContent = order.paymentStatus || "Paid";
+  card.querySelector(".confirmation-status").textContent = order.status || "Order Confirmed";
   card.querySelector(".confirmation-total").textContent = formatPrice(order.total);
+  const items = card.querySelector(".confirmation-items");
+  items.innerHTML = `<p class="eyebrow">Your little bundle</p>${(order.items || []).map((item) => `<div><span>${escapeHtml(item.name)} × ${Number(item.qty)}</span><strong>${formatPrice(Number(item.unitPrice) * Number(item.qty))}</strong></div>`).join("")}`;
+  items.hidden = !(order.items || []).length;
+  const track = card.querySelector(".confirmation-track");
+  track.href = order.id ? `account.html?order=${encodeURIComponent(order.id)}` : "account.html";
+  card.querySelector(".confirmation-actions").hidden = false;
+  card.querySelector(".confirmation-shop").hidden = true;
   const note = card.querySelector(".confirmation-note");
   note.textContent = order.notificationSent === false
-    ? "Your payment is confirmed. We couldn't send the customer confirmation email just now, but your order number is saved above."
-    : "Your payment has been received and verified by Razorpay.";
+    ? `Your order is saved. We couldn't send the confirmation email just now, but your order number is saved above.`
+    : codAccepted
+      ? "Your cash-on-delivery order is saved. We’ll send you updates as it’s prepared."
+      : "Your payment has been received and verified by Razorpay.";
 }
 
 function showUnverifiedConfirmation(card) {
@@ -356,6 +390,12 @@ function initializeShop() {
 
 function initializeCheckout() {
   const form = document.querySelector("#checkout-form");
+  const paymentChoices = [...(form?.querySelectorAll('input[name="payment"]') || [])];
+  const submitButton = form?.querySelector('[type="submit"]');
+  paymentChoices.forEach((choice) => choice.addEventListener("change", () => {
+    paymentChoices.forEach((option) => option.closest(".payment-choice")?.classList.toggle("payment-choice-selected", option.checked));
+    if (submitButton) submitButton.innerHTML = choice.value === "COD" ? "Place COD order <span>→</span>" : "Pay with UPI <span>→</span>";
+  }));
   if (form) {
     fetch("/api/account/me")
       .then(async (response) => response.ok ? response.json() : null)
@@ -376,9 +416,45 @@ function initializeCheckout() {
     }
     if (!form.reportValidity()) return;
     const values = Object.fromEntries(new FormData(form).entries());
-    values.payment = "UPI";
-    const submitButton = form.querySelector('[type="submit"]');
+    values.payment = form.elements.payment.value;
     const originalButtonText = submitButton.innerHTML;
+
+    if (values.payment === "COD") {
+      submitButton.disabled = true;
+      submitButton.textContent = "Saving your order…";
+      const items = cartStore.items.map(({ id, qty }) => ({ id, qty }));
+      try {
+        const result = await postJson("/api/orders", { ...values, items }, {
+          "Idempotency-Key": getCodCheckoutKey(items)
+        });
+        const order = { ...result.order, notificationSent: result.notificationSent };
+        try {
+          localStorage.setItem(orderStorageKey, JSON.stringify(order));
+        } catch (error) {
+          console.error("Unable to save the cash-on-delivery order receipt.", error);
+          cartStore.clear();
+          window.location.assign(`account.html?order=${encodeURIComponent(order.id)}`);
+          return;
+        }
+        try {
+          sessionStorage.removeItem("meowcro-cod-checkout");
+        } catch (error) {
+          console.error("Unable to clear the completed cash-on-delivery request reference.", error);
+        }
+        try {
+          cartStore.clear();
+        } catch (error) {
+          console.error("Unable to clear your bag after order confirmation.", error);
+        }
+        window.location.assign("confirmation.html");
+      } catch (error) {
+        console.error("Unable to save the cash-on-delivery order.", error);
+        showToast(error.message);
+        submitButton.disabled = false;
+        submitButton.innerHTML = originalButtonText;
+      }
+      return;
+    }
 
     submitButton.disabled = true;
     submitButton.textContent = "Opening secure payment…";

@@ -7,8 +7,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-export function renderBrandedEmail(text) {
+export function renderBrandedEmail(text, { actionLabel, actionUrl } = {}) {
   const body = escapeHtml(text ?? "").replace(/\r?\n/g, "<br>");
+  const action = actionLabel && actionUrl
+    ? `<p style="margin:24px 0;text-align:center;"><a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:13px 22px;background:#b85f48;color:#fffdf9;font-size:13px;font-weight:bold;letter-spacing:1px;text-decoration:none;">${escapeHtml(actionLabel)}</a></p>`
+    : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -21,7 +24,7 @@ export function renderBrandedEmail(text) {
         </td>
       </tr>
       <tr>
-        <td style="padding:28px 32px;color:#38261d;font-size:15px;line-height:1.75;overflow-wrap:anywhere;">${body}</td>
+        <td style="padding:28px 32px;color:#38261d;font-size:15px;line-height:1.75;overflow-wrap:anywhere;">${body}${action}</td>
       </tr>
       <tr>
         <td align="center" style="padding:18px 24px;border-top:1px solid #e5dbcd;color:#827469;font-size:12px;line-height:1.6;">

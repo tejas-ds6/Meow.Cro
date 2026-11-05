@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createEmailService, emailConfigurationMessage } from "../server/email-service.js";
-import { sendPaidOrderEmails } from "../server/order-email.js";
+import { sendOrderStatusEmail, sendPaidOrderEmails } from "../server/order-email.js";
 import { createRazorpayService } from "../server/payment-service.js";
 import { emailAddress, photoAttachment, text } from "../server/validation.js";
 
@@ -22,6 +22,7 @@ test("verified UPI payment sends a success email to the customer and notifies th
     }
   };
   const order = {
+    id: "00000000-0000-4000-8000-000000000001",
     number: "MC-TEST-123",
     name: "Test buyer",
     email: "buyer@example.test",
@@ -33,18 +34,43 @@ test("verified UPI payment sends a success email to the customer and notifies th
     subtotal: 500,
     shipping: 29,
     total: 529,
-    paymentId: "pay_test_456"
+    paymentId: "pay_test_456",
+    trackingLink: "https://meowcro.in/account.html?order=00000000-0000-4000-8000-000000000001"
   };
 
   const customerEmailSent = await sendPaidOrderEmails(order, emailService, "studio@example.test");
 
   assert.equal(customerEmailSent, true);
   assert.equal(messages[0].to, order.email);
-  assert.match(messages[0].subject, /Payment received/);
-  assert.match(messages[0].text, /Your UPI payment for order MC-TEST-123 has been received/);
-  assert.match(messages[0].text, /Paid total: ₹529/);
+  assert.equal(messages[0].subject, "Your Meow.Cro order is confirmed! ♡");
+  assert.match(messages[0].text, /Your Meow.Cro order MC-TEST-123 is confirmed/);
+  assert.match(messages[0].text, /Total: ₹529/);
+  assert.match(messages[0].text, /account\.html\?order=00000000-0000-4000-8000-000000000001/);
+  assert.match(messages[0].html, /TRACK MY ORDER/);
   assert.equal(messages[1].to, "studio@example.test");
-  assert.match(messages[1].text, /Razorpay payment ID: pay_test_456/);
+  assert.match(messages[1].text, /Payment reference: pay_test_456/);
+});
+
+test("order status emails link back through verified customer order access", async () => {
+  let message;
+  const sent = await sendOrderStatusEmail({
+    email: "buyer@example.test",
+    name: "Test buyer",
+    number: "MC-TEST-123",
+    status: "Shipped"
+  }, {
+    configured: true,
+    async send(value) {
+      message = value;
+      return { id: "email_status" };
+    }
+  }, "https://meowcro.in/account.html?order=order-reference", "Your parcel is on its way.");
+
+  assert.equal(sent, true);
+  assert.match(message.text, /Shipped/);
+  assert.match(message.text, /Your parcel is on its way/);
+  assert.match(message.html, /VIEW ORDER STATUS/);
+  assert.match(message.html, /https:\/\/meowcro\.in\/account\.html\?order=order-reference/);
 });
 
 test("email service creates a Resend client from configuration and sends from the studio", async () => {

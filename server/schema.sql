@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS orders (
   nimbuspost_label_url TEXT,
   cancellation_requested BOOLEAN NOT NULL DEFAULT FALSE,
   cancellation_request_status TEXT,
+  checkout_key TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -96,9 +97,12 @@ CREATE TABLE IF NOT EXISTS orders (
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS nimbuspost_order_id TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS nimbuspost_awb TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS nimbuspost_label_url TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_key TEXT;
 
 CREATE INDEX IF NOT EXISTS orders_customer_created_idx ON orders (customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS orders_email_created_idx ON orders (customer_email, created_at DESC);
+CREATE INDEX IF NOT EXISTS orders_normalized_email_created_idx ON orders (LOWER(BTRIM(customer_email)), created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS orders_checkout_key_unique_idx ON orders (checkout_key) WHERE checkout_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS product_reviews (
   id UUID PRIMARY KEY,

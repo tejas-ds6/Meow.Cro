@@ -1,21 +1,34 @@
+import { renderBrandedEmail } from "./email-template.js";
+
 export async function sendPaidOrderEmails(order, emailService, studioEmail) {
   if (!emailService.configured) {
-    console.warn("Razorpay payment was captured, but order email could not be sent: email is not configured.");
+    console.warn("Order confirmation email could not be sent: email is not configured.");
     return false;
   }
 
+  const trackingLink = order.trackingLink || "https://meowcro.in/account.html";
+  const supportLink = order.supportLink || "https://meowcro.in/contact.html";
   const items = order.items.map((item) => `- ${item.name} x ${item.qty} — ₹${item.unitPrice * item.qty}`);
   const customerMessage = [
     `Hi ${order.name},`,
     "",
-    `Your UPI payment for order ${order.number} has been received.`,
+    `Your Meow.Cro order ${order.number} is confirmed! ♡`,
     "",
+    `Email: ${order.email}`,
+    `Order date: ${new Date(order.createdAt || Date.now()).toLocaleDateString("en-IN", { dateStyle: "medium" })}`,
+    "",
+    "Your little bundle:",
     ...items,
     "",
-    `Subtotal: ₹${order.subtotal}`,
-    `Shipping: ${order.shipping ? `₹${order.shipping}` : "Free"}`,
-    `Paid total: ₹${order.total}`,
+    `Total: ₹${order.total}`,
+    `Payment method: ${order.paymentMethod || "UPI"}`,
+    `Payment status: ${order.paymentStatus || "Paid"}`,
+    `Order status: ${order.status || "Order Confirmed"}`,
     `Delivery address: ${order.address}, ${order.city} ${order.pin}`,
+    "",
+    `Track your order: ${trackingLink}`,
+    "You may be asked to verify this email before viewing your order.",
+    `Need a hand? ${supportLink}`,
     "",
     "Made slowly, with love,",
     "Meow.Cro Studio"
@@ -26,40 +39,70 @@ export async function sendPaidOrderEmails(order, emailService, studioEmail) {
     `Email: ${order.email}`,
     `Phone: ${order.phone}`,
     `Address: ${order.address}, ${order.city} ${order.pin}`,
-    "Payment: UPI — captured by Razorpay",
-    `Razorpay payment ID: ${order.paymentId}`,
+    `Payment: ${order.paymentMethod || "UPI"} — ${order.paymentStatus || "Paid"}`,
+    order.paymentId || order.paymentReference ? `Payment reference: ${order.paymentId || order.paymentReference}` : "",
     "",
     "Items:",
     ...items,
     "",
     `Subtotal: ₹${order.subtotal}`,
     `Shipping: ${order.shipping ? `₹${order.shipping}` : "Free"}`,
-    `Paid total: ₹${order.total}`,
+    `Order total: ₹${order.total}`,
     `Note: ${order.note || "None"}`
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
   let customerEmailSent = false;
   try {
     await emailService.send({
       to: order.email,
-      subject: `Payment received for order ${order.number} — Meow.Cro`,
-      text: customerMessage
+      subject: "Your Meow.Cro order is confirmed! ♡",
+      text: customerMessage,
+      html: renderBrandedEmail(customerMessage, {
+        actionLabel: "TRACK MY ORDER",
+        actionUrl: trackingLink
+      })
     });
     customerEmailSent = true;
   } catch (error) {
-    console.error("Razorpay payment was captured, but customer confirmation email delivery failed:", error);
+    console.error("Customer order confirmation email delivery failed:", error);
   }
 
   try {
     await emailService.send({
       to: studioEmail,
       replyTo: order.email,
-      subject: `Paid Meow.Cro order ${order.number}`,
+      subject: `New Meow.Cro order ${order.number}`,
       text: studioMessage
     });
   } catch (error) {
-    console.error("Razorpay payment was captured, but studio order email delivery failed:", error);
+    console.error("Studio order notification email delivery failed:", error);
   }
 
   return customerEmailSent;
+}
+
+export async function sendOrderStatusEmail(order, emailService, trackingLink, note = "") {
+  if (!emailService.configured) return false;
+  const message = [
+    `Hi ${order.name},`,
+    "",
+    `There’s a little update on order ${order.number}: ${order.status}.`,
+    note ? `Studio note: ${note}` : "",
+    "",
+    `Track your order: ${trackingLink}`,
+    "You may be asked to verify this email before viewing your order.",
+    "",
+    "Made slowly, with love,",
+    "Meow.Cro Studio"
+  ].filter(Boolean).join("\n");
+  await emailService.send({
+    to: order.email,
+    subject: `A little update on your Meow.Cro order ${order.number}`,
+    text: message,
+    html: renderBrandedEmail(message, {
+      actionLabel: "VIEW ORDER STATUS",
+      actionUrl: trackingLink
+    })
+  });
+  return true;
 }

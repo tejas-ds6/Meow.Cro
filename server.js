@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createAccountService } from "./server/account-service.js";
 import { databaseConfigured, initializeDatabase, isDatabaseReady, logDatabaseError, pool } from "./server/database.js";
 import { createEmailService, emailConfigurationMessage } from "./server/email-service.js";
-import { sendPaidOrderEmails } from "./server/order-email.js";
+import { sendOrderStatusEmail, sendPaidOrderEmails } from "./server/order-email.js";
 import { createNimbusPostService, NimbusPostError } from "./server/nimbuspost-service.js";
 import { products } from "./public/catalog.js";
 import { createOrderNumber, createRazorpayService, PaymentVerificationError } from "./server/payment-service.js";
@@ -67,6 +67,10 @@ function asyncRoute(handler) {
 
 function getSiteOrigin(request) {
   return configuredSiteUrl?.origin || `${request.protocol}://${request.get("host")}`;
+}
+
+function getPublicSiteOrigin() {
+  return configuredSiteUrl?.origin || "https://meowcro.in";
 }
 
 function requireDatabase(_req, res, next) {
@@ -132,6 +136,7 @@ app.use([
   "/api/customer/otp/send",
   "/api/customer/otp/verify",
   "/api/admin/login",
+  "/api/orders",
   "/api/payments/razorpay/orders",
   "/api/payments/razorpay/verify",
   "/api/payments/razorpay/confirm",
@@ -139,7 +144,7 @@ app.use([
   "/api/custom-requests",
   "/api/contact"
 ], sensitiveApiRateLimit);
-app.use(["/api/account", "/api/admin", "/api/customer"], (_req, res, next) => {
+app.use(["/api/account", "/api/admin", "/api/customer", "/api/orders"], (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
 });
@@ -162,6 +167,40 @@ function validatePhone(value) {
   const phone = text(value, "Phone number", { max: 30 });
   if (!/^[0-9+()\-\s]{7,30}$/.test(phone)) throw new Error("Enter a valid phone number.");
   return phone;
+}
+
+function checkoutOrderValues(body, payment) {
+  if (!Array.isArray(body?.items) || body.items.length === 0 || body.items.length > 30) {
+    throw new Error("Your bag doesn't contain valid items.");
+  }
+  const items = body.items.map((item) => {
+    const id = text(item?.id, "Product", { max: 120 });
+    const product = productsById.get(id);
+    if (!product) throw new Error("A product in your bag is no longer available.");
+    const qty = Number(item.qty);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 99) throw new Error("A product quantity is invalid.");
+    return { id, name: product.name, image: product.image, qty, unitPrice: product.price };
+  });
+  const subtotal = items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
+  const shipping = subtotal > 599 ? 0 : 29;
+  const phone = validatePhone(body.phone);
+  const pin = text(body.pin, "PIN code", { max: 6 });
+  if (!/^\d{6}$/.test(pin)) throw new Error("Enter a valid 6-digit PIN code.");
+  return {
+    name: text(body.name, "Name", { max: 120 }),
+    email: emailAddress(body.email),
+    phone,
+    address: text(body.address, "Street address", { max: 300 }),
+    city: text(body.city, "City", { max: 100 }),
+    pin,
+    note: text(body.note, "Note", { required: false, max: 1000 }),
+    payment,
+    number: createOrderNumber(),
+    items,
+    subtotal,
+    shipping,
+    total: subtotal + shipping
+  };
 }
 
 function validatePassword(value, label = "Password") {
@@ -273,8 +312,9 @@ async function persistReviewPhotos(photos) {
     }
     try {
       await accountService.requestEmailOtp(values.email);
-    } catch (error) {
-      console.error("OTP email request failed:", error);
+    } catch {
+      res.status(502).json({ error: "We couldn't send a verification code. Please try again shortly." });
+      return;
     }
     res.status(202).json({ ok: true, message: "If this email is linked to an order, a verification code will arrive shortly." });
   }));
@@ -288,8 +328,9 @@ async function persistReviewPhotos(photos) {
     }
     try {
       await accountService.requestEmailOtp(values.email);
-    } catch (error) {
-      console.error("OTP resend failed:", error);
+    } catch {
+      res.status(502).json({ error: "We couldn't send a verification code. Please try again shortly." });
+      return;
     }
     res.status(202).json({ ok: true, message: "If this email is linked to an order, a new verification code will arrive shortly." });
   }));
@@ -322,8 +363,9 @@ async function persistReviewPhotos(photos) {
     }
     try {
       await accountService.requestEmailOtp(values.email);
-    } catch (error) {
-      console.error("OTP email request failed:", error);
+    } catch {
+      res.status(502).json({ error: "We couldn't send a verification code. Please try again shortly." });
+      return;
     }
     res.status(202).json({ ok: true, message: "If this email is linked to an order, a verification code will arrive shortly." });
   }));
@@ -649,6 +691,10 @@ async function persistReviewPhotos(photos) {
       const optionalText = (value, label, max) => value === undefined ? undefined : (text(value, label, { required: false, max }) || null);
       const status = optionalText(body.status, "Order status", 40);
       if (status && !validOrderStatuses.includes(status)) throw new Error("Choose a valid order status.");
+      const paymentStatus = optionalText(body.paymentStatus, "Payment status", 40);
+      if (paymentStatus && !["Pending", "Due on delivery", "Paid", "Failed", "Refund required (manual)", "Refunded"].includes(paymentStatus)) {
+        throw new Error("Choose a valid payment status.");
+      }
       const deliveryMethod = optionalText(body.deliveryMethod, "Delivery method", 20);
       if (deliveryMethod && !["Courier", "NimbusPost", "Self Delivery"].includes(deliveryMethod)) {
         throw new Error("Choose Courier, NimbusPost, or Self Delivery.");
@@ -680,6 +726,7 @@ async function persistReviewPhotos(photos) {
       }
       return {
         status,
+        paymentStatus,
         statusNote: optionalText(body.statusNote, "Status note", 500),
         deliveryMethod,
         courierName: optionalText(body.courierName, "Courier name", 100),
@@ -692,12 +739,27 @@ async function persistReviewPhotos(photos) {
     }, res);
     if (!values) return;
     try {
+      const previousOrder = await accountService.getAdminOrder(req.params.id);
       const order = await accountService.updateAdminOrder(req.params.id, values);
       if (!order) {
         res.status(404).json({ error: "Order not found." });
         return;
       }
-      res.json({ order });
+      let notificationSent = null;
+      if (previousOrder?.status !== order.status) {
+        try {
+          notificationSent = await sendOrderStatusEmail(
+            order,
+            emailService,
+            `${getPublicSiteOrigin()}/account.html?order=${encodeURIComponent(order.id)}`,
+            values.statusNote || ""
+          );
+        } catch (error) {
+          console.error("Order status was updated, but its customer email could not be sent:", error);
+          notificationSent = false;
+        }
+      }
+      res.json({ order, notificationSent });
     } catch (error) {
       if (error.code === "NIMBUSPOST_CANCELLATION_REQUIRED") {
         res.status(409).json({ error: error.message });
@@ -798,41 +860,7 @@ app.post("/api/contact", express.json({ limit: "32kb" }), async (req, res) => {
 });
 
 app.post("/api/payments/razorpay/orders", requireDatabase, express.json({ limit: "32kb" }), async (req, res) => {
-  const values = validateFields(() => {
-    const body = req.body || {};
-    if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > 30) {
-      throw new Error("Your bag doesn't contain valid items.");
-    }
-
-    const items = body.items.map((item) => {
-      const id = text(item?.id, "Product", { max: 120 });
-      const product = productsById.get(id);
-      if (!product) throw new Error("A product in your bag is no longer available.");
-      const qty = Number(item.qty);
-      if (!Number.isInteger(qty) || qty < 1 || qty > 99) throw new Error("A product quantity is invalid.");
-      return { id, name: product.name, image: product.image, qty, unitPrice: product.price };
-    });
-    const subtotal = items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
-    const shipping = subtotal > 599 ? 0 : 29;
-    const phone = validatePhone(body.phone);
-    const pin = text(body.pin, "PIN code", { max: 6 });
-    if (!/^\d{6}$/.test(pin)) throw new Error("Enter a valid 6-digit PIN code.");
-    return {
-      name: text(body.name, "Name", { max: 120 }),
-      email: emailAddress(body.email),
-      phone,
-      address: text(body.address, "Street address", { max: 300 }),
-      city: text(body.city, "City", { max: 100 }),
-      pin,
-      note: text(body.note, "Note", { required: false, max: 1000 }),
-      payment: "UPI",
-      number: createOrderNumber(),
-      items,
-      subtotal,
-      shipping,
-      total: subtotal + shipping
-    };
-  }, res);
+  const values = validateFields(() => checkoutOrderValues(req.body, "UPI"), res);
   if (!values) return;
   if (!paymentService.configured) {
     res.status(503).json({ error: "Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to the server environment." });
@@ -853,6 +881,37 @@ app.post("/api/payments/razorpay/orders", requireDatabase, express.json({ limit:
   }
 });
 
+app.post("/api/orders", requireDatabase, express.json({ limit: "32kb" }), asyncRoute(async (req, res) => {
+  const values = validateFields(() => checkoutOrderValues(req.body, "COD"), res);
+  if (!values) return;
+  const idempotencyKey = req.get("Idempotency-Key") || "";
+  if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(idempotencyKey)) {
+    res.status(400).json({ error: "This checkout request is missing a valid idempotency reference." });
+    return;
+  }
+  try {
+    const order = await accountService.saveOrder(values, {
+      customerId: req.accountSession?.role === "customer" ? req.accountSession.customer_id : null,
+      paymentStatus: "Due on delivery",
+      idempotencyKey
+    });
+    const isReplay = order.number !== values.number;
+    let notificationSent = false;
+    if (!isReplay) {
+      const emailOrder = {
+        ...order,
+        trackingLink: `${getPublicSiteOrigin()}/account.html?order=${encodeURIComponent(order.id)}`,
+        supportLink: `${getPublicSiteOrigin()}/contact.html`
+      };
+      notificationSent = await sendPaidOrderEmails(emailOrder, emailService, process.env.MAIL_TO);
+    }
+    res.status(isReplay ? 200 : 201).json({ ok: true, order, notificationSent });
+  } catch (error) {
+    console.error("Cash on delivery order creation failed:", error);
+    res.status(502).json({ error: "We couldn't save your order right now. Please try again shortly." });
+  }
+}));
+
 app.post("/api/payments/razorpay/verify", express.json({ limit: "32kb" }), async (req, res) => {
   const details = req.body || {};
   try {
@@ -862,11 +921,20 @@ app.post("/api/payments/razorpay/verify", express.json({ limit: "32kb" }), async
       signature: details.razorpay_signature,
       verificationToken: details.verificationToken
     });
-    if (databaseConfigured && !await accountService.updatePayment(order.number, "Paid", order.paymentId)) {
+    const savedOrder = databaseConfigured
+      ? await accountService.updatePayment(order.number, "Paid", order.paymentId)
+      : null;
+    if (databaseConfigured && !savedOrder) {
       throw new Error("The verified Razorpay order was not found in PostgreSQL.");
     }
-    const notificationSent = await sendPaidOrderEmails(order, emailService, process.env.MAIL_TO);
-    res.json({ ok: true, order, notificationSent });
+    const confirmedOrder = savedOrder
+      ? { ...order, ...savedOrder, payment: "UPI (paid)", paymentId: order.paymentId }
+      : order;
+    confirmedOrder.trackingLink = savedOrder
+      ? `${getPublicSiteOrigin()}/account.html?order=${encodeURIComponent(savedOrder.id)}`
+      : `${getPublicSiteOrigin()}/account.html`;
+    const notificationSent = await sendPaidOrderEmails(confirmedOrder, emailService, process.env.MAIL_TO);
+    res.json({ ok: true, order: confirmedOrder, notificationSent });
   } catch (error) {
     if (error instanceof PaymentVerificationError) {
       res.status(400).json({ error: error.message });
@@ -886,10 +954,16 @@ app.post("/api/payments/razorpay/confirm", express.json({ limit: "32kb" }), asyn
       signature: details.razorpay_signature,
       verificationToken: details.verificationToken
     });
-    if (databaseConfigured && !await accountService.updatePayment(order.number, "Paid", order.paymentId)) {
+    const savedOrder = databaseConfigured
+      ? await accountService.updatePayment(order.number, "Paid", order.paymentId)
+      : null;
+    if (databaseConfigured && !savedOrder) {
       throw new Error("The verified Razorpay order was not found in PostgreSQL.");
     }
-    res.json({ ok: true, order });
+    res.json({
+      ok: true,
+      order: savedOrder ? { ...order, ...savedOrder, payment: "UPI (paid)", paymentId: order.paymentId } : order
+    });
   } catch (error) {
     if (error instanceof PaymentVerificationError) {
       res.status(400).json({ error: error.message });
@@ -983,6 +1057,9 @@ if (databaseConfigured) {
 
 app.listen(port, "0.0.0.0", () => {
   console.log(`Meow.Cro is listening on port ${port}`);
+  if (String(process.env.OTP_SECRET || "").length < 32) {
+    console.warn("Email-based guest order access is unavailable until OTP_SECRET is set to a random value of at least 32 characters.");
+  }
   if (!emailService.configured) {
     console.warn(emailConfigurationMessage);
   }

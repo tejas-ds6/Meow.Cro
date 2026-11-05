@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap"></noscript>
-  <link rel="stylesheet" href="styles.css?v=order-reviews-20261101"><script type="module" src="account.js?v=order-reviews-20261101"></script>
+  <link rel="stylesheet" href="styles.css?v=order-access-20261105"><script type="module" src="account.js?v=order-access-20261105"></script>
 </head>
 <body>
   <header class="site-header info-header account-header"><a class="brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a><button class="menu-toggle" aria-label="Open menu" aria-expanded="false">☰</button><nav class="main-nav" aria-label="Main navigation"><a href="index.html">Home</a><a href="shop.html">Shop</a><a class="active" href="account.html">My account</a><a href="order-tracking.html">Order updates</a></nav></header>
@@ -24,6 +24,7 @@
           <label class="field">Password<input name="password" type="password" autocomplete="current-password" required></label>
           <button class="button button-primary" type="submit">Sign in <span>→</span></button>
           <button class="account-text-button" type="button" data-auth-view="forgot">Forgot your password?</button>
+          <button class="account-text-button" type="button" data-auth-view="email">View orders with an email code</button>
         </form>
         <form class="account-form" id="register-form" hidden>
           <h2>A little account <em>for you.</em></h2>
@@ -46,6 +47,15 @@
           <label class="field">Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
           <button class="button button-primary" type="submit">Reset password <span>→</span></button>
           <button class="account-text-button" type="button" data-auth-view="forgot">This link expired? Request another</button>
+        </form>
+        <form class="account-form" id="email-form" hidden>
+          <h2>Find your little <em>orders.</em></h2>
+          <p>We’ll send a one-time code to the email address used at checkout. No account needed.</p>
+          <label class="field">Checkout email address<input name="email" type="email" autocomplete="email" required></label>
+          <button class="button button-outline" id="send-order-code" type="button">Email me a code</button>
+          <label class="field" id="order-code-field" hidden>6-digit verification code<input name="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+          <button class="button button-primary" id="verify-order-code" type="submit" hidden>View my orders <span>→</span></button>
+          <button class="account-text-button" type="button" data-auth-view="login">Back to sign in</button>
         </form>
       </div>
     </section>

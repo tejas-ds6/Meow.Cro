@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID, scrypt as callbackScrypt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, scrypt as callbackScrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(callbackScrypt);
@@ -103,15 +103,13 @@ function normalizeEmail(value) {
   return String(value ?? "").trim().toLowerCase();
 }
 
-function environmentSecret() {
-  return String(process.env?.OTP_SECRET || "meowcro-passwordless-otp-secret");
-}
-
-function hashOtpCode(code, secret = environmentSecret()) {
+function hashOtpCode(code, secret) {
   return createHmac("sha256", secret).update(String(code)).digest("hex");
 }
 
 export function createAccountService({ database, emailService, environment }) {
+  const otpSecret = String(environment.OTP_SECRET || "");
+
   async function createSession(customerId, role = "customer", customerEmail = null) {
     const token = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + sessionLifetimeMs);
@@ -191,8 +189,14 @@ export function createAccountService({ database, emailService, environment }) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       throw new Error("Enter a valid email address.");
     }
-    const otp = Array.from({ length: 6 }, () => String(Math.floor(Math.random() * 10))).join("");
-    const otpHash = hashOtpCode(otp);
+    if (otpSecret.length < 32) {
+      throw new Error("Email verification is not configured. Set OTP_SECRET to a random value of at least 32 characters.");
+    }
+    if (typeof emailService?.send !== "function") {
+      throw new Error("Email verification is unavailable because email delivery is not configured.");
+    }
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const otpHash = hashOtpCode(otp, otpSecret);
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     await database.query(
       "UPDATE customer_email_otp_tokens SET used_at = NOW() WHERE email = $1 AND used_at IS NULL AND expires_at > NOW()",
@@ -202,18 +206,12 @@ export function createAccountService({ database, emailService, environment }) {
       "INSERT INTO customer_email_otp_tokens (id, email, otp_hash, attempts, expires_at, created_at) VALUES ($1, $2, $3, 0, $4, NOW())",
       [randomUUID(), normalizedEmail, otpHash, expiresAt]
     );
-    if (typeof emailService?.send === "function") {
-      try {
-        await emailService.send({
-          to: normalizedEmail,
-          subject: "Your Meow.Cro verification code",
-          text: `Your Meow.Cro verification code is ${otp}. This code expires in 5 minutes.`
-        });
-      } catch (error) {
-        console.error("OTP delivery failed:", error);
-      }
-    }
-    return { email: normalizedEmail, expiresAt, otp };
+    await emailService.send({
+      to: normalizedEmail,
+      subject: "Your Meow.Cro verification code",
+      text: `Your Meow.Cro verification code is ${otp}. This code expires in 5 minutes.`
+    });
+    return { email: normalizedEmail, expiresAt };
   }
 
   async function verifyEmailOtp(email, otp) {
@@ -231,8 +229,9 @@ export function createAccountService({ database, emailService, environment }) {
       await database.query("UPDATE customer_email_otp_tokens SET used_at = NOW() WHERE id = $1", [challenge.id]);
       return { ok: false, attempts: Number(challenge.attempts), maxAttempts: 5, locked: true };
     }
-    const expected = hashOtpCode(inputOtp);
-    if (expected !== challenge.otp_hash) {
+    const expected = Buffer.from(hashOtpCode(inputOtp, otpSecret), "hex");
+    const storedHash = Buffer.from(challenge.otp_hash, "hex");
+    if (expected.length !== storedHash.length || !timingSafeEqual(expected, storedHash)) {
       const attempts = Number(challenge.attempts) + 1;
       await database.query(
         "UPDATE customer_email_otp_tokens SET attempts = $1 WHERE id = $2",
@@ -376,7 +375,12 @@ export function createAccountService({ database, emailService, environment }) {
     return result.rowCount > 0;
   }
 
-  async function saveOrder(order, { customerId = null, razorpayOrderId = null, paymentStatus = "Pending" } = {}) {
+  async function saveOrder(order, {
+    customerId = null,
+    razorpayOrderId = null,
+    paymentStatus = "Pending",
+    idempotencyKey = null
+  } = {}) {
     const id = randomUUID();
     const client = await database.connect();
     try {
@@ -384,15 +388,23 @@ export function createAccountService({ database, emailService, environment }) {
       const result = await client.query(
         `INSERT INTO orders (
           id, number, customer_id, customer_email, name, phone, address, city, pin, note, items,
-          subtotal, shipping, total, payment_method, payment_status, razorpay_order_id
-        ) VALUES ($1, $2, $3, LOWER($4), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          subtotal, shipping, total, payment_method, payment_status, razorpay_order_id, checkout_key
+        ) VALUES ($1, $2, $3, LOWER(BTRIM($4)), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        ON CONFLICT (checkout_key) WHERE checkout_key IS NOT NULL DO NOTHING
         RETURNING *`,
         [
           id, order.number, customerId, order.email, order.name, order.phone, order.address, order.city, order.pin,
           order.note || "", JSON.stringify(order.items), order.subtotal, order.shipping, order.total,
-          order.payment, paymentStatus, razorpayOrderId
+          order.payment, paymentStatus, razorpayOrderId, idempotencyKey
         ]
       );
+      if (!result.rows[0] && idempotencyKey) {
+        const existing = await client.query("SELECT * FROM orders WHERE checkout_key = $1", [idempotencyKey]);
+        if (!existing.rows[0]) throw new Error("The checkout request could not be saved.");
+        await client.query("COMMIT");
+        return safeOrder(existing.rows[0]);
+      }
+      if (!result.rows[0]) throw new Error("The checkout request could not be saved.");
       await client.query(
         "INSERT INTO order_status_events (id, order_id, status, note) VALUES ($1, $2, $3, $4)",
         [randomUUID(), id, "Order Placed", paymentStatus === "Pending" ? "Awaiting payment or studio confirmation." : "Order received."]
@@ -437,7 +449,7 @@ export function createAccountService({ database, emailService, environment }) {
   async function listCustomerOrdersByEmail(email) {
     const normalizedEmail = normalizeEmail(email);
     const result = await database.query(
-      "SELECT * FROM orders WHERE customer_email = LOWER($1) ORDER BY created_at DESC",
+      "SELECT * FROM orders WHERE LOWER(BTRIM(customer_email)) = $1 ORDER BY created_at DESC",
       [normalizedEmail]
     );
     return result.rows.map(safeOrder);
@@ -468,7 +480,7 @@ export function createAccountService({ database, emailService, environment }) {
         'status', e.status, 'note', e.note, 'createdAt', e.created_at
       ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events
        FROM orders o LEFT JOIN order_status_events e ON e.order_id = o.id
-       WHERE o.id = $1 AND o.customer_email = LOWER($2) GROUP BY o.id`,
+       WHERE o.id = $1 AND LOWER(BTRIM(o.customer_email)) = $2 GROUP BY o.id`,
       [id, normalizedEmail]
     );
     return result.rows[0] ? safeOrder(result.rows[0]) : null;
@@ -516,7 +528,7 @@ export function createAccountService({ database, emailService, environment }) {
     try {
       await client.query("BEGIN");
       const order = await client.query(
-        "SELECT id, order_status, cancellation_requested FROM orders WHERE id = $1 AND customer_email = LOWER($2) FOR UPDATE",
+        "SELECT id, order_status, cancellation_requested FROM orders WHERE id = $1 AND LOWER(BTRIM(customer_email)) = $2 FOR UPDATE",
         [id, normalizedEmail]
       );
       if (!order.rows[0] || terminalStatuses.has(order.rows[0].order_status) || order.rows[0].cancellation_requested) {
@@ -847,6 +859,9 @@ export function createAccountService({ database, emailService, environment }) {
       const cancellationStatus = update.cancellationDecision
         ? (update.cancellationDecision === "approve" ? "Approved" : "Rejected")
         : old.cancellation_request_status;
+      const nextPaymentStatus = nextStatus === "Cancelled" && old.payment_status === "Paid"
+        ? "Refund required (manual)"
+        : update.paymentStatus || old.payment_status;
       const saved = await client.query(
         `UPDATE orders SET order_status = $1, delivery_method = $2, courier_name = $3,
           tracking_id = $4, tracking_url = $5, courier_status = $6, estimated_delivery = $7,
@@ -863,7 +878,7 @@ export function createAccountService({ database, emailService, environment }) {
           update.estimatedDelivery === undefined ? old.estimated_delivery : update.estimatedDelivery,
           update.cancellationDecision || null,
           cancellationStatus,
-          nextStatus === "Cancelled" && old.payment_status === "Paid" ? "Refund required (manual)" : old.payment_status,
+          nextPaymentStatus,
           id
         ]
       );
@@ -871,6 +886,12 @@ export function createAccountService({ database, emailService, environment }) {
         await client.query(
           "INSERT INTO order_status_events (id, order_id, status, note) VALUES ($1, $2, $3, $4)",
           [randomUUID(), id, nextStatus, update.statusNote || ""]
+        );
+      }
+      if (nextPaymentStatus !== old.payment_status) {
+        await client.query(
+          "INSERT INTO order_status_events (id, order_id, status, note) VALUES ($1, $2, $3, $4)",
+          [randomUUID(), id, `Payment ${nextPaymentStatus}`, update.statusNote || ""]
         );
       }
       if (update.deliveryMethod && update.deliveryMethod !== old.delivery_method) {

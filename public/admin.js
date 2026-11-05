@@ -67,6 +67,7 @@ function displayOrders(orders) {
     ${order.cancellationRequested ? `<div class="cancellation-alert"><strong>Cancellation requested</strong><span>${escapeHtml(order.cancellationRequestStatus)}</span></div>` : ""}
     <form class="admin-order-form" data-admin-order="${escapeHtml(order.id)}">
       <label class="field">Order status<select name="status">${statuses.map((status) => `<option value="${escapeHtml(status)}" ${status === order.status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}</select></label>
+      <label class="field">Payment status<select name="paymentStatus">${["Pending", "Due on delivery", "Paid", "Failed", "Refund required (manual)", "Refunded"].map((status) => `<option value="${escapeHtml(status)}" ${status === order.paymentStatus ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}</select></label>
       <label class="field">Delivery method<select name="deliveryMethod" ${order.nimbuspostAwb ? "disabled" : ""}><option value="">Not assigned</option><option value="Courier" ${order.deliveryMethod === "Courier" ? "selected" : ""}>Courier</option><option value="NimbusPost" ${order.deliveryMethod === "NimbusPost" ? "selected" : ""}>NimbusPost</option><option value="Self Delivery" ${order.deliveryMethod === "Self Delivery" ? "selected" : ""}>Self Delivery</option></select></label>
       <label class="field">Courier partner name<input name="courierName" maxlength="100" value="${escapeHtml(order.courierName)}" ${order.nimbuspostAwb ? "readonly" : ""}></label>
       <label class="field">Shipment tracking ID<input name="trackingId" maxlength="120" value="${escapeHtml(order.trackingId)}" ${order.nimbuspostAwb ? "readonly" : ""}></label>
@@ -173,12 +174,14 @@ orderList.addEventListener("submit", async (event) => {
   button.disabled = true;
   try {
     const values = Object.fromEntries(new FormData(form));
-    await request(`/api/admin/orders/${encodeURIComponent(form.dataset.adminOrder)}`, {
+    const result = await request(`/api/admin/orders/${encodeURIComponent(form.dataset.adminOrder)}`, {
       method: "PATCH",
       body: JSON.stringify(values)
     });
     await loadOrders();
-    showMessage("Order and customer tracking have been updated.");
+    showMessage(result.notificationSent === false
+      ? "Order updated, but we couldn't send the customer status email."
+      : "Order and customer tracking have been updated.");
   } catch (error) {
     showMessage(error.message, true);
   } finally {

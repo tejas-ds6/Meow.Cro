@@ -41,7 +41,8 @@ I built **Meow.Cro**, a full-stack e-commerce website designed around a small ha
 - **Checkout** — submit delivery details and choose Cash on Delivery or UPI payment.
 - **Custom orders** — send a request for a personalised crochet creation.
 - **Customer accounts** — register, sign in, manage profile details and saved addresses, and view order history.
-- **Order updates** — follow order progress from the customer account.
+- **Guest order access** — verify the checkout email with a one-time code to view every order placed with that address.
+- **Order updates** — open a confirmation or email tracking link, verify access when needed, and follow order progress and courier details.
 - **Studio communication** — contact and newsletter forms help customers stay connected.
 
 ### Studio experience
@@ -189,13 +190,14 @@ npm run build
 | `PORT` | Port used by the Express server (defaults to `3000`) |
 | `SITE_URL` | Optional public canonical site URL used for sitemap, AI guide, canonical, and social-sharing URLs; defaults to the request origin |
 | `DATABASE_URL` | Required PostgreSQL connection string; use Neon’s pooled connection URL with `sslmode=require` |
+| `OTP_SECRET` | Required for email-based order access; use a random secret of at least 32 characters |
 | `RAZORPAY_KEY_ID` | Razorpay public key ID for UPI checkout |
 | `RAZORPAY_KEY_SECRET` | Server-side Razorpay secret; keep private |
 | `RESEND_API_KEY` | Resend API key for outgoing email |
 | `SMTP_FROM` | Verified sender address used for email delivery |
 | `MAIL_TO` | Studio inbox that receives customer enquiries and order notifications |
 
-Some integrations are optional during local development. Features that depend on an unconfigured service will not be available until its environment variables are provided.
+Some integrations are optional during local development. Features that depend on an unconfigured service will not be available until its environment variables are provided. Generate `OTP_SECRET` independently from other credentials (for example, with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`); do not use the example placeholder in production.
 
 ### GoDaddy deployment with Neon
 
