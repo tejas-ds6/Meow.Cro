@@ -557,16 +557,24 @@ function initializeCustomRequestConfirmation() {
   const card = document.querySelector("#custom-request-confirmation");
   if (!card) return;
 
+  const showUnavailableRequest = (message) => {
+    card.querySelector(".eyebrow").textContent = "Request details";
+    card.querySelector("h1").textContent = "Let's start again.";
+    card.querySelector(".confirmation-lede").textContent = message;
+    card.querySelector(".custom-confirmation-details").hidden = true;
+    card.querySelector(".confirmation-note").hidden = true;
+  };
+
   let values;
   try {
     values = JSON.parse(sessionStorage.getItem("crosia-custom-request") || "null");
   } catch (error) {
     console.error("Unable to read your custom request.", error);
-    card.querySelector(".custom-confirmation-lede").textContent = "We couldn't load your request details. Please go back and try again, or email us directly.";
+    showUnavailableRequest("We couldn't load your request details. Please go back and try again, or email us directly.");
     return;
   }
   if (!values) {
-    card.querySelector(".custom-confirmation-lede").textContent = "We couldn't find your request details. Please start again, or email us directly.";
+    showUnavailableRequest("We couldn't find your request details. Please start again, or email us directly.");
     return;
   }
 
@@ -592,7 +600,7 @@ function initializeSearch() {
   document.querySelector("#site-search")?.setAttribute("name", "query");
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function initializeApp() {
   renderCart();
   renderConfirmation();
   if (document.querySelector("[data-products]")) initializeShop();
@@ -661,4 +669,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }, { passive: true });
   }
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeApp, { once: true });
+} else {
+  initializeApp();
+}
