@@ -75,10 +75,12 @@ function handleSessionQuery(sql, values, sessions, adminSessions, customers = ne
 
 function createMemoryDatabase() {
   const customers = new Map();
+  const orders = new Map();
   const sessions = new Map();
   const adminSessions = new Map();
   return {
     customers,
+    orders,
     sessions,
     adminSessions,
     async query(sql, values = []) {
@@ -90,8 +92,17 @@ function createMemoryDatabase() {
         customers.set(customer.email, customer);
         return { rows: [{ id, name, email: customer.email, phone }] };
       }
+      if (sql.includes("UPDATE orders SET customer_id")) {
+        const [customerId, email] = values;
+        for (const order of orders.values()) {
+          if (order.customer_id === null && order.customer_email.trim().toLowerCase() === email) {
+            order.customer_id = customerId;
+          }
+        }
+        return { rows: [] };
+      }
       if (sql.includes("SELECT id, name, email, phone, password_hash FROM customers")) {
-        const customer = customers.get(String(values[0]).toLowerCase());
+        const customer = customers.get(String(values[0]).trim().toLowerCase());
         return { rows: customer ? [customer] : [] };
       }
       throw new Error(`Unexpected SQL in account service test: ${sql}`);
@@ -147,13 +158,22 @@ function createOrderMemoryDatabase() {
         return { rows: order ? [order] : [] };
       }
       if (sql.includes("LOWER(BTRIM(customer_email))")) {
-        const email = String(values[0]).trim().toLowerCase();
-        return { rows: [...orders.values()].filter((order) => order.customer_email.trim().toLowerCase() === email) };
+        const customerId = values.length > 1 ? values[0] : null;
+        const email = String(values.length > 1 ? values[1] : values[0]).trim().toLowerCase();
+        return {
+          rows: [...orders.values()].filter((order) =>
+            (customerId !== null && order.customer_id === customerId) ||
+            order.customer_email.trim().toLowerCase() === email)
+        };
       }
       if (sql.includes("FROM orders o LEFT JOIN order_status_events")) {
-        const [id, email] = values;
-        const order = [...orders.values()].find((item) =>
-          item.id === id && item.customer_email.trim().toLowerCase() === String(email).toLowerCase());
+        const [id, second, third] = values;
+        const customerId = third === undefined ? null : second;
+        const email = third === undefined ? second : third;
+        const order = [...orders.values()].find((item) => item.id === id && (
+          (customerId && item.customer_id === customerId) ||
+          (email && item.customer_email.trim().toLowerCase() === String(email).toLowerCase())
+        ));
         return { rows: order ? [{ ...order, events: events.filter((event) => event.order_id === order.id) }] : [] };
       }
       if (sql.includes("SELECT * FROM orders WHERE id = $1")) {
@@ -403,6 +423,54 @@ test("customer account passwords are hashed and sessions are opaque, expiring se
   assert.equal(await service.resolveSession("not-a-session-token", "customer", customerTabId), null);
 });
 
+test("registering with an order email links unclaimed guest orders to the account", async () => {
+  const database = createMemoryDatabase();
+  const previousOrder = {
+    id: "guest-order-id",
+    customer_id: null,
+    customer_email: "buyer@example.test"
+  };
+  const unrelatedOrder = {
+    id: "unrelated-order-id",
+    customer_id: null,
+    customer_email: "someone-else@example.test"
+  };
+  const alreadyOwnedOrder = {
+    id: "already-owned-order-id",
+    customer_id: "another-customer-id",
+    customer_email: "buyer@example.test"
+  };
+  const lateGuestOrder = {
+    id: "late-guest-order-id",
+    customer_id: null,
+    customer_email: "buyer@example.test"
+  };
+  database.orders.set(previousOrder.id, previousOrder);
+  database.orders.set(unrelatedOrder.id, unrelatedOrder);
+  database.orders.set(alreadyOwnedOrder.id, alreadyOwnedOrder);
+  const service = createAccountService({
+    database,
+    emailService: null,
+    environment: {}
+  });
+
+  const registered = await service.register({
+    name: "Meow Buyer",
+    email: "Buyer@Example.Test",
+    phone: "9876543210",
+    password: "a-secure-customer-password"
+  }, customerTabId);
+
+  assert.equal(previousOrder.customer_id, registered.customer.id);
+  assert.equal(unrelatedOrder.customer_id, null);
+  assert.equal(alreadyOwnedOrder.customer_id, "another-customer-id");
+
+  database.orders.set(lateGuestOrder.id, lateGuestOrder);
+  const loggedIn = await service.login(" Buyer@Example.Test ", "a-secure-customer-password", customerTabId);
+  assert.equal(loggedIn.customer.id, registered.customer.id);
+  assert.equal(lateGuestOrder.customer_id, registered.customer.id);
+});
+
 test("customer login verifies passwords and admin login cannot create a customer session", async () => {
   const database = createMemoryDatabase();
   const adminPassword = "admin-pass-12345";
@@ -467,6 +535,10 @@ test("UPI order details are stored and payment verification updates the persiste
   assert.equal(database.events[0].status, "Order Placed");
   assert.equal((await service.listCustomerOrdersByEmail(" BUYER@example.test ")).length, 1);
   assert.equal((await service.getOrderForSession({ customer_email: "buyer@example.test" }, saved.id)).id, saved.id);
+  const accountSession = { customer_id: "registered-customer-id", customer_email: "buyer@example.test" };
+  assert.equal((await service.listOrdersForSession(accountSession)).length, 1);
+  assert.equal((await service.getOrderForSession(accountSession, saved.id)).id, saved.id);
+  assert.equal(await service.getOrderForSession({ customer_id: "registered-customer-id", customer_email: "another@example.test" }, saved.id), null);
   assert.equal(await service.getOrderForSession({ customer_email: "another@example.test" }, saved.id), null);
 
   const paid = await service.updatePayment(order.number, "Paid", "pay_test_456");

@@ -211,22 +211,33 @@ export function createAccountService({ database, emailService, environment }) {
     };
   }
 
+  async function linkOrdersToCustomer(customerId, email) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return;
+    await database.query(
+      `UPDATE orders SET customer_id = $1, updated_at = NOW()
+       WHERE LOWER(BTRIM(customer_email)) = $2 AND customer_id IS NULL`,
+      [customerId, normalizedEmail]
+    );
+  }
+
   async function register({ name, email, phone, password }, tabId) {
     const passwordHash = await hashPassword(password);
     const id = randomUUID();
     const result = await database.query(
       `INSERT INTO customers (id, name, email, phone, password_hash)
-       VALUES ($1, $2, LOWER($3), $4, $5)
+       VALUES ($1, $2, LOWER(BTRIM($3)), $4, $5)
        RETURNING id, name, email, phone`,
       [id, name, email, phone, passwordHash]
     );
+    await linkOrdersToCustomer(result.rows[0].id, result.rows[0].email);
     const session = await createSession(id, "customer", result.rows[0].email, tabId);
     return { customer: result.rows[0], session };
   }
 
   async function login(email, password, tabId) {
     const result = await database.query(
-      "SELECT id, name, email, phone, password_hash FROM customers WHERE email = LOWER($1)",
+      "SELECT id, name, email, phone, password_hash FROM customers WHERE email = LOWER(BTRIM($1))",
       [email]
     );
     const customer = result.rows[0];
@@ -235,6 +246,7 @@ export function createAccountService({ database, emailService, environment }) {
       return null;
     }
     if (!await verifyPassword(password, customer.password_hash)) return null;
+    await linkOrdersToCustomer(customer.id, customer.email);
     const session = await createSession(customer.id, "customer", customer.email, tabId);
     return {
       customer: { id: customer.id, name: customer.name, email: customer.email, phone: customer.phone },
@@ -397,7 +409,15 @@ export function createAccountService({ database, emailService, environment }) {
         "SELECT id, label, recipient_name AS \"recipientName\", phone, address, city, pin FROM customer_addresses WHERE customer_id = $1 ORDER BY created_at DESC",
         [customerId]
       ),
-      database.query("SELECT order_status, COUNT(*)::int AS count FROM orders WHERE customer_id = $1 GROUP BY order_status", [customerId])
+      database.query(
+        `SELECT order_status, COUNT(*)::int AS count FROM orders
+         WHERE customer_id = $1
+           OR LOWER(BTRIM(customer_email)) = (
+             SELECT LOWER(BTRIM(email)) FROM customers WHERE id = $1
+           )
+         GROUP BY order_status`,
+        [customerId]
+      )
     ]);
     const orderCounts = Object.fromEntries(orders.rows.map((row) => [row.order_status, row.count]));
     const totalOrders = Object.values(orderCounts).reduce((sum, count) => sum + count, 0);
@@ -515,10 +535,13 @@ export function createAccountService({ database, emailService, environment }) {
     return existing.rows[0] ? safeOrder(existing.rows[0]) : null;
   }
 
-  async function listCustomerOrders(customerId) {
+  async function listCustomerOrders(customerId, email = null) {
     const result = await database.query(
-      "SELECT * FROM orders WHERE customer_id = $1 ORDER BY created_at DESC",
-      [customerId]
+      `SELECT * FROM orders
+       WHERE customer_id = $1
+          OR ($2::text IS NOT NULL AND LOWER(BTRIM(customer_email)) = $2)
+       ORDER BY created_at DESC`,
+      [customerId, normalizeEmail(email) || null]
     );
     return result.rows.map(safeOrder);
   }
@@ -533,19 +556,22 @@ export function createAccountService({ database, emailService, environment }) {
   }
 
   async function listOrdersForSession(session) {
-    if (session?.customer_id) return listCustomerOrders(session.customer_id);
+    if (session?.customer_id) return listCustomerOrders(session.customer_id, session.customer_email);
     if (session?.customer_email) return listCustomerOrdersByEmail(session.customer_email);
     return [];
   }
 
-  async function getCustomerOrder(customerId, id) {
+  async function getCustomerOrder(customerId, id, email = null) {
     const result = await database.query(
       `SELECT o.*, COALESCE(json_agg(json_build_object(
         'status', e.status, 'note', e.note, 'createdAt', e.created_at
       ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events
        FROM orders o LEFT JOIN order_status_events e ON e.order_id = o.id
-       WHERE o.id = $1 AND o.customer_id = $2 GROUP BY o.id`,
-      [id, customerId]
+       WHERE o.id = $1
+         AND (o.customer_id = $2
+           OR ($3::text IS NOT NULL AND LOWER(BTRIM(o.customer_email)) = $3))
+       GROUP BY o.id`,
+      [id, customerId, normalizeEmail(email) || null]
     );
     return result.rows[0] ? safeOrder(result.rows[0]) : null;
   }
@@ -564,18 +590,21 @@ export function createAccountService({ database, emailService, environment }) {
   }
 
   async function getOrderForSession(session, id) {
-    if (session?.customer_id) return getCustomerOrder(session.customer_id, id);
+    if (session?.customer_id) return getCustomerOrder(session.customer_id, id, session.customer_email);
     if (session?.customer_email) return getCustomerOrderByEmail(session.customer_email, id);
     return null;
   }
 
-  async function requestCancellation(customerId, id, note) {
+  async function requestCancellation(customerId, id, note, email = null) {
     const client = await database.connect();
     try {
       await client.query("BEGIN");
       const order = await client.query(
-        "SELECT id, order_status, cancellation_requested FROM orders WHERE id = $1 AND customer_id = $2 FOR UPDATE",
-        [id, customerId]
+        `SELECT id, order_status, cancellation_requested FROM orders
+         WHERE id = $1 AND (customer_id = $2
+           OR ($3::text IS NOT NULL AND LOWER(BTRIM(customer_email)) = $3))
+         FOR UPDATE`,
+        [id, customerId, normalizeEmail(email) || null]
       );
       if (!order.rows[0] || terminalStatuses.has(order.rows[0].order_status) || order.rows[0].cancellation_requested) {
         await client.query("ROLLBACK");
@@ -631,7 +660,7 @@ export function createAccountService({ database, emailService, environment }) {
   }
 
   async function requestCancellationForSession(session, id, note) {
-    if (session?.customer_id) return requestCancellation(session.customer_id, id, note);
+    if (session?.customer_id) return requestCancellation(session.customer_id, id, note, session.customer_email);
     if (session?.customer_email) return requestCancellationByEmail(session.customer_email, id, note);
     return false;
   }
