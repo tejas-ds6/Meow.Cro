@@ -18,9 +18,23 @@ CREATE TABLE IF NOT EXISTS customer_sessions (
 );
 
 ALTER TABLE customer_sessions ADD COLUMN IF NOT EXISTS customer_email TEXT;
+ALTER TABLE customer_sessions ADD COLUMN IF NOT EXISTS idle_expires_at TIMESTAMPTZ;
+ALTER TABLE customer_sessions ADD COLUMN IF NOT EXISTS tab_id TEXT;
 
 CREATE INDEX IF NOT EXISTS customer_sessions_expiry_idx ON customer_sessions (expires_at);
 CREATE INDEX IF NOT EXISTS customer_sessions_customer_email_idx ON customer_sessions (customer_email);
+CREATE INDEX IF NOT EXISTS customer_sessions_idle_expiry_idx ON customer_sessions (idle_expires_at);
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  expires_at TIMESTAMPTZ NOT NULL,
+  idle_expires_at TIMESTAMPTZ NOT NULL,
+  tab_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS admin_sessions_expiry_idx ON admin_sessions (expires_at);
+CREATE INDEX IF NOT EXISTS admin_sessions_idle_expiry_idx ON admin_sessions (idle_expires_at);
 
 CREATE TABLE IF NOT EXISTS customer_email_otp_tokens (
   id UUID PRIMARY KEY,
@@ -108,11 +122,13 @@ CREATE TABLE IF NOT EXISTS product_reviews (
   id UUID PRIMARY KEY,
   product_id TEXT NOT NULL,
   customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+  customer_email TEXT,
   order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
   customer_name TEXT NOT NULL,
   rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
-  review_text TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  review_title TEXT NOT NULL DEFAULT '',
+  review_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'hidden')),
   is_featured BOOLEAN NOT NULL DEFAULT FALSE,
   admin_note TEXT NOT NULL DEFAULT '',
   approved_at TIMESTAMPTZ,
@@ -120,6 +136,24 @@ CREATE TABLE IF NOT EXISTS product_reviews (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (product_id, customer_id, order_id)
 );
+
+ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS customer_email TEXT;
+ALTER TABLE product_reviews ADD COLUMN IF NOT EXISTS review_title TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_reviews ALTER COLUMN review_text SET DEFAULT '';
+ALTER TABLE product_reviews DROP CONSTRAINT IF EXISTS product_reviews_status_check;
+ALTER TABLE product_reviews ADD CONSTRAINT product_reviews_status_check
+  CHECK (status IN ('pending', 'approved', 'rejected', 'hidden'));
+
+UPDATE product_reviews pr
+SET customer_email = LOWER(BTRIM(o.customer_email))
+FROM orders o
+WHERE pr.order_id = o.id
+  AND pr.customer_email IS NULL
+  AND NULLIF(BTRIM(o.customer_email), '') IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS product_reviews_purchase_unique_idx
+  ON product_reviews (product_id, order_id, LOWER(BTRIM(customer_email)))
+  WHERE customer_email IS NOT NULL AND order_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS product_review_photos (
   id UUID PRIMARY KEY,
@@ -133,6 +167,20 @@ CREATE TABLE IF NOT EXISTS product_review_photos (
 CREATE INDEX IF NOT EXISTS product_reviews_product_status_idx ON product_reviews (product_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS product_reviews_customer_idx ON product_reviews (customer_id, product_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS product_review_photos_review_idx ON product_review_photos (review_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS product_review_moderation_events (
+  id UUID PRIMARY KEY,
+  review_id UUID NOT NULL,
+  actor TEXT NOT NULL DEFAULT 'admin',
+  action TEXT NOT NULL CHECK (action IN ('pending', 'approved', 'rejected', 'hidden', 'restored', 'featured', 'unfeatured', 'deleted')),
+  previous_status TEXT,
+  next_status TEXT,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS product_review_moderation_events_review_idx
+  ON product_review_moderation_events (review_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS order_status_events (
   id UUID PRIMARY KEY,

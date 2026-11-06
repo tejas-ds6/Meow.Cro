@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAccountService } from "./server/account-service.js";
@@ -26,12 +26,17 @@ if (configuredSiteUrl && !["http:", "https:"].includes(configuredSiteUrl.protoco
 app.set("trust proxy", 1);
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(rootDir, "public");
+const reviewUploadDir = path.resolve(process.env.REVIEW_UPLOAD_DIR || path.join(rootDir, "data", "review-photos"));
+const reviewUploadRelativePath = path.relative(publicDir, reviewUploadDir);
+if (reviewUploadRelativePath === "" || (!reviewUploadRelativePath.startsWith(`..${path.sep}`) && reviewUploadRelativePath !== ".." && !path.isAbsolute(reviewUploadRelativePath))) {
+  throw new Error("REVIEW_UPLOAD_DIR must be outside the public directory.");
+}
 const emailService = createEmailService(process.env);
 const paymentService = createRazorpayService(process.env);
 const nimbusPostService = createNimbusPostService(process.env);
 const accountService = pool ? createAccountService({ database: pool, emailService, environment: process.env }) : null;
 const productsById = new Map(products.map((product) => [product.id, product]));
-const sessionCookieName = "meowcro_session";
+const tabSessionHeader = "x-tab-session";
 const accountDatabaseUnavailable = "Customer accounts and saved order tracking require PostgreSQL. Configure DATABASE_URL and restart the server.";
 const sitemapPaths = [
   "/", "/shop.html", "/story.html", "/custom.html", "/contact.html", "/faq.html",
@@ -50,15 +55,35 @@ function readCookie(request, name) {
   return cookie ? cookie.slice(name.length + 1) : "";
 }
 
-function writeSessionCookie(response, request, session) {
-  const secure = process.env.NODE_ENV === "production" || request.secure ? "; Secure" : "";
-  const maxAge = Math.max(0, Math.floor((new Date(session.expiresAt).getTime() - Date.now()) / 1000));
-  response.setHeader("Set-Cookie", `${sessionCookieName}=${encodeURIComponent(session.token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`);
+function getTabSessionId(request) {
+  const value = request.get(tabSessionHeader) || "";
+  return /^[\da-f]{32}$/i.test(value) ? value : "";
 }
 
-function clearSessionCookie(response, request) {
+function getSessionCookieName(role, tabId) {
+  return `meowcro_${role}_${tabId}`;
+}
+
+async function hasAdminSession(request) {
+  const tabId = getTabSessionId(request);
+  const token = tabId ? readCookie(request, getSessionCookieName("admin", tabId)) : "";
+  if (!token || !accountService || !isDatabaseReady()) return false;
+  const session = await accountService.resolveSession(token, "admin", tabId);
+  return session?.role === "admin";
+}
+
+function writeSessionCookie(response, request, session, role, tabId) {
   const secure = process.env.NODE_ENV === "production" || request.secure ? "; Secure" : "";
-  response.setHeader("Set-Cookie", `${sessionCookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  const cookieName = getSessionCookieName(role, tabId);
+  response.setHeader("Set-Cookie", `${cookieName}=${session.token}; HttpOnly; SameSite=Lax; Path=/${secure}`);
+  response.setHeader("X-Session-Idle-Expires-At", new Date(session.idleExpiresAt).toISOString());
+  response.setHeader("X-Session-Expires-At", new Date(session.expiresAt).toISOString());
+}
+
+function clearSessionCookie(response, request, role, tabId) {
+  const secure = process.env.NODE_ENV === "production" || request.secure ? "; Secure" : "";
+  const cookieName = getSessionCookieName(role, tabId);
+  response.setHeader("Set-Cookie", `${cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
 }
 
 function asyncRoute(handler) {
@@ -81,16 +106,39 @@ function requireDatabase(_req, res, next) {
   next();
 }
 
-const loadAccountSession = asyncRoute(async (req, _res, next) => {
-  req.accountSession = databaseConfigured && isDatabaseReady()
-    ? await accountService.resolveSession(readCookie(req, sessionCookieName))
+const loadAccountSession = asyncRoute(async (req, res, next) => {
+  const role = req.path.startsWith("/admin/") ? "admin"
+    : req.path.startsWith("/account/") || req.path.startsWith("/customer/") ||
+      req.path.startsWith("/payments/razorpay/") ? "customer"
+      : null;
+  const tabId = role ? getTabSessionId(req) : "";
+  const cookieName = role && tabId ? getSessionCookieName(role, tabId) : "";
+  const token = cookieName ? readCookie(req, cookieName) : "";
+  req.tabSessionId = tabId;
+  req.sessionCookieName = cookieName;
+  req.sessionCookiePresent = Boolean(token);
+  const canResolveSession = databaseConfigured && isDatabaseReady() && Boolean(accountService);
+  req.accountSession = canResolveSession && role
+    ? await accountService.resolveSession(token, role, tabId, req.get("x-user-activity") === "1")
     : null;
+  if (req.accountSession) {
+    res.setHeader("X-Session-Idle-Expires-At", new Date(req.accountSession.idle_expires_at).toISOString());
+    res.setHeader("X-Session-Expires-At", new Date(req.accountSession.expires_at).toISOString());
+  }
+  if (token && canResolveSession && !req.accountSession) {
+    await accountService.logout(token, role);
+    clearSessionCookie(res, req, role, tabId);
+  }
   next();
 });
 
 function requireCustomer(req, res, next) {
   if (req.accountSession?.role !== "customer") {
-    res.status(401).json({ error: "Please sign in to access your account." });
+    const expired = req.sessionCookiePresent;
+    res.status(401).json({
+      error: expired ? "Your session has expired. Please sign in again." : "Please sign in to access your account.",
+      ...(expired ? { code: "SESSION_EXPIRED" } : {})
+    });
     return;
   }
   next();
@@ -98,7 +146,11 @@ function requireCustomer(req, res, next) {
 
 function requireAdmin(req, res, next) {
   if (req.accountSession?.role !== "admin") {
-    res.status(401).json({ error: "Please sign in as an administrator." });
+    const expired = req.sessionCookiePresent;
+    res.status(401).json({
+      error: expired ? "Your admin session has expired. Please sign in again." : "Please sign in as an administrator.",
+      ...(expired ? { code: "SESSION_EXPIRED" } : {})
+    });
     return;
   }
   next();
@@ -146,6 +198,19 @@ app.use([
 ], sensitiveApiRateLimit);
 app.use(["/api/account", "/api/admin", "/api/customer", "/api/orders"], (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
+  next();
+});
+app.use(["/api/account", "/api/admin", "/api/customer"], (req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    next();
+    return;
+  }
+  const tabId = getTabSessionId(req);
+  const expectedOrigin = configuredSiteUrl?.origin || `${req.protocol}://${req.get("host")}`;
+  if (!tabId || req.get("origin") !== expectedOrigin) {
+    res.status(403).json({ error: "This request could not be verified. Refresh the page and try again." });
+    return;
+  }
   next();
 });
 app.use("/api/account/orders/:id/reviews", express.json({ limit: "34mb" }));
@@ -244,24 +309,43 @@ function parseReviewPhotos(value) {
 
 async function persistReviewPhotos(photos) {
   if (!Array.isArray(photos) || !photos.length) return [];
-  const uploadDir = path.join(publicDir, "uploads", "reviews");
-  await mkdir(uploadDir, { recursive: true });
+  await mkdir(reviewUploadDir, { recursive: true });
   const saved = [];
-  for (const [index, photo] of photos.entries()) {
-    const dataUrl = typeof photo === "string" ? photo : photo?.url || "";
-    if (!dataUrl) continue;
-    const attachment = photoAttachment(dataUrl);
-    const mimeType = attachment.contentType;
-    const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
-    const filename = `${Date.now()}-${randomUUID()}.${extension}`;
-    const targetPath = path.join(uploadDir, filename);
-    await writeFile(targetPath, attachment.content);
-    saved.push({
-      url: `/uploads/reviews/${filename}`,
-      altText: `Customer review photo ${index + 1}`
-    });
+  try {
+    for (const [index, photo] of photos.entries()) {
+      const dataUrl = typeof photo === "string" ? photo : photo?.url || "";
+      if (!dataUrl) continue;
+      const attachment = photoAttachment(dataUrl);
+      const extension = attachment.contentType === "image/png" ? "png" : attachment.contentType === "image/webp" ? "webp" : "jpg";
+      const id = randomUUID();
+      const filename = `${id}.${extension}`;
+      await writeFile(path.join(reviewUploadDir, filename), attachment.content, { flag: "wx" });
+      saved.push({
+        id,
+        url: `/api/review-photos/${id}`,
+        storageReference: filename,
+        altText: `Customer review photo ${index + 1}`
+      });
+    }
+  } catch (error) {
+    await removeReviewPhotoFiles(saved.map((photo) => photo.storageReference));
+    throw error;
   }
   return saved;
+}
+
+async function removeReviewPhotoFiles(references) {
+  for (const reference of references) {
+    const filename = path.basename(String(reference || ""));
+    if (!/^[\da-f-]{36}\.(?:jpg|png|webp)$/i.test(filename)) continue;
+    try {
+      await unlink(path.join(reviewUploadDir, filename));
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.error("Unable to remove a review photo file.", error);
+      }
+    }
+  }
 }
 
   app.post("/api/account/register", requireDatabase, asyncRoute(async (req, res) => {
@@ -276,8 +360,9 @@ async function persistReviewPhotos(photos) {
     }, res);
     if (!values) return;
     try {
-      const result = await accountService.register(values);
-      writeSessionCookie(res, req, result.session);
+      const result = await accountService.register(values, req.tabSessionId);
+      await accountService.logout(readCookie(req, getSessionCookieName("customer", req.tabSessionId)), "customer");
+      writeSessionCookie(res, req, result.session, "customer", req.tabSessionId);
       res.status(201).json({ customer: result.customer });
     } catch (error) {
       if (error.code === "23505") {
@@ -294,12 +379,13 @@ async function persistReviewPhotos(photos) {
       password: validatePassword(req.body?.password, "Password")
     }), res);
     if (!values) return;
-    const result = await accountService.login(values.email, values.password);
+    const result = await accountService.login(values.email, values.password, req.tabSessionId);
     if (!result) {
       res.status(401).json({ error: "Email or password is incorrect." });
       return;
     }
-    writeSessionCookie(res, req, result.session);
+    await accountService.logout(readCookie(req, getSessionCookieName("customer", req.tabSessionId)), "customer");
+    writeSessionCookie(res, req, result.session, "customer", req.tabSessionId);
     res.json({ customer: result.customer });
   }));
 
@@ -345,12 +431,13 @@ async function persistReviewPhotos(photos) {
       res.status(400).json({ error: "Enter the 6-digit code sent to your email." });
       return;
     }
-    const result = await accountService.verifyEmailOtp(values.email, values.otp);
+    const result = await accountService.verifyEmailOtp(values.email, values.otp, req.tabSessionId);
     if (!result || !result.ok) {
       res.status(401).json({ error: "This verification code is invalid or has expired." });
       return;
     }
-    writeSessionCookie(res, req, result.session);
+    await accountService.logout(readCookie(req, getSessionCookieName("customer", req.tabSessionId)), "customer");
+    writeSessionCookie(res, req, result.session, "customer", req.tabSessionId);
     res.json({ ok: true, customer: result.customer });
   }));
 
@@ -380,12 +467,13 @@ async function persistReviewPhotos(photos) {
       res.status(400).json({ error: "Enter the 6-digit code sent to your email." });
       return;
     }
-    const result = await accountService.verifyEmailOtp(values.email, values.otp);
+    const result = await accountService.verifyEmailOtp(values.email, values.otp, req.tabSessionId);
     if (!result || !result.ok) {
       res.status(401).json({ error: "This verification code is invalid or has expired." });
       return;
     }
-    writeSessionCookie(res, req, result.session);
+    await accountService.logout(readCookie(req, getSessionCookieName("customer", req.tabSessionId)), "customer");
+    writeSessionCookie(res, req, result.session, "customer", req.tabSessionId);
     res.json({ ok: true, customer: result.customer });
   }));
 
@@ -395,20 +483,27 @@ async function persistReviewPhotos(photos) {
       password: validatePassword(req.body?.password, "Password")
     }), res);
     if (!values) return;
-    const result = await accountService.adminLogin(values.email, values.password);
+    const result = await accountService.adminLogin(values.email, values.password, req.tabSessionId);
     if (!result) {
       res.status(401).json({
         error: "Admin sign-in failed. Check the email and password, and make sure ADMIN_EMAIL and ADMIN_PASSWORD are set on the server. The configured admin password must be at least 16 characters."
       });
       return;
     }
-    writeSessionCookie(res, req, result.session);
+    await accountService.logout(readCookie(req, getSessionCookieName("admin", req.tabSessionId)), "admin");
+    writeSessionCookie(res, req, result.session, "admin", req.tabSessionId);
     res.json({ ok: true });
   }));
 
   app.post("/api/account/logout", requireDatabase, asyncRoute(async (req, res) => {
-    await accountService.logout(readCookie(req, sessionCookieName));
-    clearSessionCookie(res, req);
+    await accountService.logout(readCookie(req, getSessionCookieName("customer", req.tabSessionId)), "customer");
+    clearSessionCookie(res, req, "customer", req.tabSessionId);
+    res.json({ ok: true });
+  }));
+
+  app.post("/api/admin/logout", requireDatabase, asyncRoute(async (req, res) => {
+    await accountService.logout(readCookie(req, getSessionCookieName("admin", req.tabSessionId)), "admin");
+    clearSessionCookie(res, req, "admin", req.tabSessionId);
     res.json({ ok: true });
   }));
 
@@ -469,7 +564,7 @@ async function persistReviewPhotos(photos) {
       res.status(400).json({ error: "Your current password is incorrect." });
       return;
     }
-    clearSessionCookie(res, req);
+    clearSessionCookie(res, req, "customer", req.tabSessionId);
     res.json({ ok: true, message: "Password changed. Please sign in again." });
   }));
 
@@ -531,23 +626,37 @@ async function persistReviewPhotos(photos) {
       return;
     }
     const reviewData = await accountService.getProductReviewSummary(productId);
+    const requestedOffset = Number.parseInt(req.query.offset, 10);
+    const offset = Number.isInteger(requestedOffset) ? Math.min(Math.max(requestedOffset, 0), 10000) : 0;
+    const reviews = await accountService.listApprovedProductReviews(productId, 6, offset);
     res.json({
       product: { id: product.id, name: product.name },
       summary: reviewData.summary,
-      featuredReviews: reviewData.featuredReviews
+      featuredReviews: reviewData.featuredReviews,
+      reviews,
+      hasMore: offset + reviews.length < reviewData.summary.totalReviews
     });
   }));
 
   app.get("/api/account/orders/:id/reviews", requireDatabase, requireCustomer, requireUuidParameter, asyncRoute(async (req, res) => {
-    res.json({ reviews: await accountService.listOrderReviews(req.accountSession.customer_id, req.params.id) });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ reviews: await accountService.listOrderReviews(req.accountSession, req.params.id) });
   }));
 
-  app.post("/api/account/orders/:id/reviews", requireDatabase, requireCustomer, requireUuidParameter, asyncRoute(async (req, res) => {
+  const reviewSubmissionRateLimit = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 12,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: "You've submitted reviews too quickly. Please try again later." }
+  });
+  app.post("/api/account/orders/:id/reviews", reviewSubmissionRateLimit, requireDatabase, requireCustomer, requireUuidParameter, asyncRoute(async (req, res) => {
     const body = req.body || {};
     const values = validateFields(() => ({
       productId: text(body.productId, "Product", { max: 120 }),
       rating: Number(body.rating),
-      reviewText: text(body.reviewText, "Review", { max: 1000 }),
+      reviewTitle: text(body.reviewTitle, "Review title", { required: false, max: 120 }),
+      reviewText: text(body.reviewText, "Review", { required: false, max: 1000 }),
       photos: parseReviewPhotos(body.photos || [])
     }), res);
     if (!values) return;
@@ -556,46 +665,46 @@ async function persistReviewPhotos(photos) {
       res.status(404).json({ error: "This product could not be found." });
       return;
     }
-    if (values.reviewText.length < 8) {
-      res.status(400).json({ error: "Write a review with at least 8 characters." });
-      return;
-    }
     if (![1, 2, 3, 4, 5].includes(Number(values.rating))) {
       res.status(400).json({ error: "Choose a rating between 1 and 5 stars." });
       return;
     }
-    if (!await accountService.getEligibleDeliveredOrderForProduct(req.accountSession.customer_id, req.params.id, productId)) {
-      res.status(403).json({ error: "Only customers with a delivered order for this product can leave a review." });
-      return;
-    }
-    if ((await accountService.listOrderReviews(req.accountSession.customer_id, req.params.id))
-      .some((review) => review.productId === productId)) {
-      res.status(409).json({ error: "You have already reviewed this product from that purchase." });
-      return;
-    }
     const savedPhotos = await persistReviewPhotos(values.photos);
-    const review = await accountService.submitProductReview({
-      productId,
-      customerId: req.accountSession.customer_id,
-      reviewText: values.reviewText,
-      rating: values.rating,
-      orderId: req.params.id,
-      photos: savedPhotos
-    });
+    let review;
+    try {
+      review = await accountService.submitProductReview({
+        productId,
+        session: req.accountSession,
+        reviewTitle: values.reviewTitle,
+        reviewText: values.reviewText,
+        rating: values.rating,
+        orderId: req.params.id,
+        photos: savedPhotos
+      });
+    } catch (error) {
+      await removeReviewPhotoFiles(savedPhotos.map((photo) => photo.storageReference));
+      throw error;
+    }
     res.status(201).json({ review });
   }));
 
   app.get("/api/admin/reviews", requireDatabase, requireAdmin, asyncRoute(async (req, res) => {
     const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : "";
-    const validStatuses = new Set(["pending", "approved", "rejected"]);
+    const validStatuses = new Set(["pending", "approved", "rejected", "hidden"]);
     const status = validStatuses.has(statusFilter) ? statusFilter : null;
-    res.json({ reviews: await accountService.listAdminReviews(status) });
+    const reviews = await accountService.listAdminReviews(status);
+    res.json({
+      reviews: reviews.map((review) => ({
+        ...review,
+        productName: productsById.get(review.productId)?.name || review.productId
+      }))
+    });
   }));
 
   app.patch("/api/admin/reviews/:id", requireDatabase, requireAdmin, requireUuidParameter, asyncRoute(async (req, res) => {
     const body = req.body || {};
     const status = typeof body.status === "string" ? body.status.trim().toLowerCase() : null;
-    if (status && !new Set(["pending", "approved", "rejected"]).has(status)) {
+    if (status && !new Set(["pending", "approved", "rejected", "hidden"]).has(status)) {
       res.status(400).json({ error: "Choose a valid review status." });
       return;
     }
@@ -610,6 +719,46 @@ async function persistReviewPhotos(photos) {
       return;
     }
     res.json({ review });
+  }));
+
+  app.delete("/api/admin/reviews/:id", requireDatabase, requireAdmin, requireUuidParameter, asyncRoute(async (req, res) => {
+    const note = typeof req.body?.adminNote === "string"
+      ? text(req.body.adminNote, "Review note", { required: false, max: 400 })
+      : "";
+    const result = await accountService.deleteProductReview(req.params.id, note);
+    if (!result) {
+      res.status(404).json({ error: "Review not found." });
+      return;
+    }
+    await removeReviewPhotoFiles(result.photoReferences);
+    res.status(204).end();
+  }));
+
+  app.get("/api/review-photos/:id", requireDatabase, asyncRoute(async (req, res, next) => {
+    if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(req.params.id)) {
+      res.sendStatus(404);
+      return;
+    }
+    const photo = await accountService.getReviewPhoto(req.params.id);
+    if (!photo) {
+      res.sendStatus(404);
+      return;
+    }
+    const isAdmin = await hasAdminSession(req);
+    if (photo.status !== "approved" && !isAdmin) {
+      res.sendStatus(404);
+      return;
+    }
+    const filename = path.basename(photo.storage_reference);
+    if (!/^(?:[\da-f-]{36}|\d{10,}-[\da-f-]{36})\.(?:jpg|png|webp)$/i.test(filename)) {
+      res.sendStatus(404);
+      return;
+    }
+    res.setHeader("Cache-Control", photo.status === "approved" ? "public, max-age=300" : "private, no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(path.join(reviewUploadDir, filename), (error) => {
+      if (error) next(error);
+    });
   }));
 
   app.get("/api/admin/orders", requireDatabase, requireAdmin, asyncRoute(async (_req, res) => {
@@ -991,6 +1140,27 @@ app.get([...seoPageFiles.keys()], asyncRoute(async (req, res) => {
   res.type("html").send(html.replaceAll("{{SITE_ORIGIN}}", siteOrigin));
 }));
 
+app.use(["/account.html", "/admin.html"], (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+app.get("/uploads/reviews/:filename", requireDatabase, asyncRoute(async (req, res, next) => {
+  const filename = req.params.filename;
+  if (!/^(?:[\da-f-]{36}|\d{10,}-[\da-f-]{36})\.(?:jpg|png|webp)$/i.test(filename)) {
+    res.sendStatus(404);
+    return;
+  }
+  const photo = await accountService.getReviewPhotoByReference(`/uploads/reviews/${filename}`);
+  if (!photo || (photo.status !== "approved" && !await hasAdminSession(req))) {
+    res.sendStatus(404);
+    return;
+  }
+  res.setHeader("Cache-Control", photo.status === "approved" ? "public, max-age=300" : "private, no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.sendFile(path.join(publicDir, "uploads", "reviews", filename), (error) => {
+    if (error) next(error);
+  });
+}));
 app.use(express.static(publicDir));
 
 app.use((error, req, res, next) => {
@@ -1026,7 +1196,7 @@ if (databaseConfigured) {
 
 app.listen(port, "0.0.0.0", () => {
   console.log(`Meow.Cro is listening on port ${port}`);
-  if (String(process.env.OTP_SECRET || "").length < 32) {
+  if (String(process.env.OTP_SECRET ?? "").trim().length < 32) {
     console.warn("Email-based guest order access is unavailable until OTP_SECRET is set to a random value of at least 32 characters.");
   }
   if (!emailService.configured) {

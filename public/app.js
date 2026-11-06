@@ -1,5 +1,6 @@
 import { getProduct, imageUrl, products } from "./catalog.js?v=flat-products-20261104";
 import { createCartStore } from "./cart-store.js";
+import { tabSessionHeaders, tabSessionId } from "./tab-session.js?v=tab-session-20261106";
 
 const formatPrice = (amount) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(amount);
 const orderStorageKey = "crosia-last-order";
@@ -73,10 +74,11 @@ async function postJson(endpoint, values, headers = {}) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json", ...headers },
+      headers: tabSessionHeaders({ "Content-Type": "application/json", "Accept": "application/json", ...headers }),
       body: JSON.stringify(values)
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
     throw new Error("We couldn't reach the server. Check your connection and try again.");
   }
   const responseType = response.headers.get("content-type") || "unknown content type";
@@ -247,11 +249,25 @@ function escapeHtml(value) {
   })[character]);
 }
 
-async function loadProductReviews(productId) {
-  const response = await fetch(`/api/products/${encodeURIComponent(productId)}/reviews`, { headers: { Accept: "application/json" } });
+async function loadProductReviews(productId, offset = 0) {
+  const response = await fetch(`/api/products/${encodeURIComponent(productId)}/reviews?offset=${offset}`, { headers: { Accept: "application/json" } });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || "Unable to load reviews.");
   return body;
+}
+
+function renderProductReview(review) {
+  const photos = (review.photos || []).map((photo) => `
+    <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText || "Customer product photo")}" loading="lazy">
+  `).join("");
+  const date = new Date(review.createdAt).toLocaleDateString("en-IN", { dateStyle: "medium" });
+  return `<article class="review-card">
+    <div class="review-card-head"><strong>${escapeHtml(review.customerName || "Verified customer")}</strong><span aria-label="${review.rating} out of 5 stars">${"★".repeat(Number(review.rating))}</span></div>
+    ${review.reviewTitle ? `<h4>${escapeHtml(review.reviewTitle)}</h4>` : ""}
+    ${review.reviewText ? `<p>${escapeHtml(review.reviewText)}</p>` : ""}
+    ${photos ? `<div class="review-card-photos">${photos}</div>` : ""}
+    <div class="review-card-meta"><time datetime="${escapeHtml(new Date(review.createdAt).toISOString())}">${escapeHtml(date)}</time><span>Verified purchase</span></div>
+  </article>`;
 }
 
 async function showProduct(id) {
@@ -268,21 +284,34 @@ async function showProduct(id) {
   const summary = reviewData.summary || { totalReviews: 0, averageRating: 0 };
   const reviewCount = Number(summary.totalReviews) || 0;
   const averageRating = Number(summary.averageRating) || 0;
-  const featuredCards = (reviewData.featuredReviews || []).slice(0, 2).map((review) => {
-    const photos = (review.photos || []).map((photo) => `
-      <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText || "Customer product photo")}" loading="lazy">
-    `).join("");
-    const date = new Date(review.createdAt).toLocaleDateString("en-IN", { dateStyle: "medium" });
-    return `<article class="review-card">
-      <div class="review-card-head"><strong>${escapeHtml(review.customerName || "Verified customer")}</strong><span aria-label="${review.rating} out of 5 stars">${"★".repeat(Number(review.rating))}</span></div>
-      <p>${escapeHtml(review.reviewText)}</p>
-      ${photos ? `<div class="review-card-photos">${photos}</div>` : ""}
-      <div class="review-card-meta"><time datetime="${escapeHtml(new Date(review.createdAt).toISOString())}">${escapeHtml(date)}</time><span>Verified purchase</span></div>
-    </article>`;
-  }).join("") || '<p class="empty-review-copy">Be the first to share your experience.</p>';
-  dialog.querySelector(".dialog-content").innerHTML = `<div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div><div class="dialog-product-copy"><p class="eyebrow">${escapeHtml(product.category)} · made slowly</p><h2>${escapeHtml(product.name)}</h2><strong class="dialog-price">${formatPrice(product.price)}</strong><div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5, ${reviewCount} reviews"><span class="review-stars" aria-hidden="true">★★★★★</span><span>${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span></div><p>${escapeHtml(product.description)}</p><div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div><button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button><small>Made with love. Ships with care.</small><section class="featured-reviews" aria-label="Customer reviews"><h3>Customer reviews</h3>${featuredCards}</section></div>`;
+  const ratingDistribution = (summary.ratingDistribution || []).slice().reverse().map(({ rating, count }) => `
+    <div class="review-distribution-row"><span>${rating} ★</span><meter min="0" max="${Math.max(reviewCount, 1)}" value="${Number(count) || 0}" aria-label="${count} ${rating}-star reviews"></meter><span>${Number(count) || 0}</span></div>
+  `).join("");
+  const reviewCards = (reviewData.reviews || []).map(renderProductReview).join("")
+    || '<p class="empty-review-copy">Be the first to share your experience.</p>';
+  const moreReviews = reviewData.hasMore
+    ? `<button class="button button-outline review-load-more" type="button" data-load-product-reviews="${escapeHtml(product.id)}" data-review-offset="${(reviewData.reviews || []).length}">See more reviews</button>`
+    : "";
+  dialog.querySelector(".dialog-content").innerHTML = `<div class="dialog-image"><img src="${imageUrl(product.image, 900)}" alt="${escapeHtml(product.alt)}"></div><div class="dialog-product-copy"><p class="eyebrow">${escapeHtml(product.category)} · made slowly</p><h2>${escapeHtml(product.name)}</h2><strong class="dialog-price">${formatPrice(product.price)}</strong><div class="product-reviews" aria-label="${averageRating.toFixed(1)} out of 5, ${reviewCount} reviews"><span class="review-stars" aria-hidden="true">★★★★★</span><span>${averageRating.toFixed(1)} · ${reviewCount} ${reviewCount === 1 ? "review" : "reviews"}</span></div><p>${escapeHtml(product.description)}</p><div class="dialog-color"><span>Color</span><strong>${escapeHtml(product.color)}</strong></div><button class="button button-primary dialog-add" type="button" data-add="${escapeHtml(product.id)}">Add to bag <span>→</span></button><small>Made with love. Ships with care.</small><section class="featured-reviews" aria-label="Customer reviews"><h3>Customer reviews</h3><div class="review-distribution">${ratingDistribution}</div><div class="product-review-list" data-product-review-list>${reviewCards}</div>${moreReviews}</section></div>`;
   dialog.showModal();
 }
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-load-product-reviews]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const result = await loadProductReviews(button.dataset.loadProductReviews, Number(button.dataset.reviewOffset) || 0);
+    const list = button.closest(".featured-reviews").querySelector("[data-product-review-list]");
+    list.insertAdjacentHTML("beforeend", (result.reviews || []).map(renderProductReview).join(""));
+    button.dataset.reviewOffset = String(Number(button.dataset.reviewOffset) + result.reviews.length);
+    if (!result.hasMore) button.remove();
+    else button.disabled = false;
+  } catch (error) {
+    showToast(error.message || "Unable to load more reviews.");
+    button.disabled = false;
+  }
+});
 
 async function renderConfirmation() {
   const card = document.querySelector(".confirmation-card");
@@ -372,8 +401,8 @@ function initializeShop() {
 function initializeCheckout() {
   const form = document.querySelector("#checkout-form");
   const submitButton = form?.querySelector('[type="submit"]');
-  if (form) {
-    fetch("/api/account/me")
+  if (form && tabSessionId) {
+    fetch("/api/account/me", { headers: tabSessionHeaders({ Accept: "application/json" }) })
       .then(async (response) => response.ok ? response.json() : null)
       .then((profile) => {
         if (!profile?.customer) return;

@@ -1,3 +1,10 @@
+import {
+  clearSessionExpiry,
+  observeSessionExpiry,
+  tabSessionError,
+  tabSessionHeaders
+} from "./tab-session.js?v=tab-session-20261106";
+
 const accountMessage = document.querySelector("#account-message");
 const authPanel = document.querySelector("#account-auth");
 const dashboard = document.querySelector("#account-dashboard");
@@ -18,25 +25,59 @@ function showMessage(message, isError = false) {
   accountMessage.classList.toggle("message-success", !isError);
 }
 
+function handleExpiredSession() {
+  clearSessionExpiry();
+  accountData = undefined;
+  orders = [];
+  document.querySelector("#order-detail").hidden = true;
+  showAuth("login");
+  showMessage("Your session has expired. Please sign in again.", true);
+}
+
 async function request(path, options = {}) {
   let response;
   try {
     response = await fetch(path, {
       ...options,
-      headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}), ...options.headers },
+      headers: tabSessionHeaders({
+        Accept: "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers
+      }),
       credentials: "same-origin"
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    if (!dashboard.hidden && path.startsWith("/api/account/")) {
+      clearSessionExpiry();
+      showAuth("login");
+      showMessage("We couldn't verify your session. Please try again.", true);
+    }
     throw new Error("We couldn't reach the studio. Check your connection and try again.");
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(result.error || "That didn't work just now. Please try again.");
     error.status = response.status;
+    error.code = result.code;
+    if (response.status === 401 && !dashboard.hidden) handleExpiredSession();
+    else if (response.status >= 500 && !dashboard.hidden && path.startsWith("/api/account/")) {
+      clearSessionExpiry();
+      showAuth("login");
+      showMessage("We couldn't verify your session. Please try again.", true);
+    }
     throw error;
   }
+  if (path.startsWith("/api/account/")) observeSessionExpiry(response, handleExpiredSession);
   return result;
 }
+
+document.querySelectorAll("[data-show-password]").forEach((toggle) => {
+  toggle.addEventListener("change", () => {
+    const input = document.getElementById(toggle.getAttribute("aria-controls"));
+    if (input) input.type = toggle.checked ? "text" : "password";
+  });
+});
 
 function showAuth(view) {
   authPanel.hidden = false;
@@ -79,7 +120,7 @@ function renderOrders() {
 function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
   const detail = document.querySelector("#order-detail");
   detail.dataset.orderId = order.id;
-  const reviewsByProduct = new Map(reviewStatuses.map((review) => [review.productId, review.status]));
+  const reviewsByProduct = new Map(reviewStatuses.map((review) => [review.productId, review]));
   const delivery = order.deliveryMethod === "Self Delivery"
     ? '<div class="delivery-note"><strong>Delivered by MEOWCRO</strong><span>Delivery progress is updated by our studio.</span></div>'
     : order.deliveryMethod === "Courier"
@@ -91,21 +132,31 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
     ${delivery}
     <div class="order-detail-items">${order.items.map((item) => {
       const productId = String(item.id ?? item.productId ?? "");
-      const reviewStatus = reviewsByProduct.get(productId);
+      const review = reviewsByProduct.get(productId);
+      const reviewStatus = review?.status;
       const reviewMessage = reviewStatus === "approved"
         ? "Review approved"
         : reviewStatus === "pending"
           ? "Review submitted – Awaiting approval"
           : reviewStatus === "rejected"
             ? "Review not approved"
+            : reviewStatus === "hidden"
+              ? "Your review is hidden"
             : "";
-      const reviewAction = accountData?.customer?.id && order.status === "Delivered"
-        ? reviewStatus
-          ? `<p class="order-review-status">${reviewMessage}</p>`
+      const reviewAction = accountData?.customer?.email && order.status === "Delivered" && order.paymentStatus === "Paid"
+        ? review
+          ? `<p class="order-review-status">${reviewMessage}</p>
+             <button class="account-text-button" type="button" data-view-review="${escapeHtml(productId)}">View your review</button>
+             <div class="order-review-preview" data-review-preview="${escapeHtml(productId)}" hidden>
+               ${review.reviewTitle ? `<strong>${escapeHtml(review.reviewTitle)}</strong>` : ""}
+               <span aria-label="${Number(review.rating)} out of 5 stars">${"★".repeat(Number(review.rating))}</span>
+               ${review.reviewText ? `<p>${escapeHtml(review.reviewText)}</p>` : ""}
+             </div>`
           : `<button class="account-text-button" type="button" data-write-review="${escapeHtml(productId)}">Write a review</button>
              <form class="account-review-form" data-review-form data-order-id="${escapeHtml(order.id)}" data-product-id="${escapeHtml(productId)}" hidden>
                <fieldset class="review-rating"><legend>Your rating</legend><div>${[1, 2, 3, 4, 5].map((rating) => `<label aria-label="${rating} stars"><input type="radio" name="rating" value="${rating}" required><span aria-hidden="true">★</span></label>`).join("")}</div></fieldset>
-               <label class="field">Your review<textarea name="reviewText" rows="3" maxlength="1000" minlength="8" required placeholder="Tell us what you think of your handmade piece."></textarea></label>
+               <label class="field">Review title <span class="optional">(optional)</span><input name="reviewTitle" maxlength="120" placeholder="A few words about your purchase"></label>
+               <label class="field">Your review <span class="optional">(optional)</span><textarea name="reviewText" rows="3" maxlength="1000" placeholder="Tell us what you think of your handmade piece."></textarea></label>
                <label class="field">Product photos <span class="optional">(up to 5)</span><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple data-review-photos></label>
                <div class="review-photo-previews" data-review-previews></div>
                <button class="button button-primary" type="submit">Submit review <span>→</span></button>
@@ -231,6 +282,15 @@ document.addEventListener("click", async (event) => {
       form.hidden = !form.hidden;
       writeReview.textContent = form.hidden ? "Write a review" : "Close review form";
       if (!form.hidden) form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    return;
+  }
+  const viewReview = event.target.closest("[data-view-review]");
+  if (viewReview) {
+    const preview = document.querySelector(`[data-review-preview="${CSS.escape(viewReview.dataset.viewReview)}"]`);
+    if (preview) {
+      preview.hidden = !preview.hidden;
+      viewReview.textContent = preview.hidden ? "View your review" : "Hide your review";
     }
     return;
   }
@@ -467,6 +527,7 @@ document.querySelector("#password-form").addEventListener("submit", async (event
         newPassword: form.elements.newPassword.value
       })
     });
+    clearSessionExpiry();
     form.reset();
     dashboard.hidden = true;
     showAuth("login");
@@ -499,6 +560,8 @@ document.querySelector("#account-dashboard").addEventListener("submit", async (e
   const reviewForm = event.target.closest("[data-review-form]");
   if (reviewForm) {
     event.preventDefault();
+    if (reviewForm.dataset.submitting === "true") return;
+    reviewForm.dataset.submitting = "true";
     const submitButton = reviewForm.querySelector('[type="submit"]');
     submitButton.disabled = true;
     const originalLabel = submitButton.textContent;
@@ -517,6 +580,7 @@ document.querySelector("#account-dashboard").addEventListener("submit", async (e
         body: JSON.stringify({
           productId: reviewForm.dataset.productId,
           rating: Number(reviewForm.elements.rating.value),
+          reviewTitle: reviewForm.elements.reviewTitle.value,
           reviewText: reviewForm.elements.reviewText.value,
           photos
         }),
@@ -530,6 +594,7 @@ document.querySelector("#account-dashboard").addEventListener("submit", async (e
       showMessage("Review submitted – Awaiting approval");
     } catch (error) {
       showMessage(error.message, true);
+      reviewForm.dataset.submitting = "false";
       submitButton.disabled = false;
       submitButton.textContent = originalLabel;
     }
@@ -555,6 +620,7 @@ document.querySelector("#account-dashboard").addEventListener("submit", async (e
 document.querySelector("#account-logout").addEventListener("click", async () => {
   try {
     await request("/api/account/logout", { method: "POST" });
+    clearSessionExpiry();
     showAuth("login");
     showMessage("You’ve signed out safely.");
   } catch (error) {
@@ -589,14 +655,16 @@ if (resetToken) {
     .catch((error) => {
       if (error.status === 401) {
         showAuth("login");
-        showMessage("");
+        showMessage(error.code === "SESSION_EXPIRED" ? error.message : "", error.code === "SESSION_EXPIRED");
       }
       else {
         showAuth("login");
         showMessage(error.message, true);
       }
     });
+
 }
+if (tabSessionError) showMessage(tabSessionError, true);
 
 window.setInterval(async () => {
   if (dashboard.hidden) return;

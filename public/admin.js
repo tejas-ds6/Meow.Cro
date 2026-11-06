@@ -1,3 +1,10 @@
+import {
+  clearSessionExpiry,
+  observeSessionExpiry,
+  tabSessionError,
+  tabSessionHeaders
+} from "./tab-session.js?v=tab-session-20261106";
+
 const message = document.querySelector("#admin-message");
 const loginPanel = document.querySelector("#admin-login");
 const dashboard = document.querySelector("#admin-dashboard");
@@ -20,6 +27,14 @@ const price = (amount) => new Intl.NumberFormat("en-IN", {
 }).format(amount);
 
 let dashboardView = "orders";
+const reviewPhotoObjectUrls = new Set();
+
+function handleExpiredSession() {
+  clearSessionExpiry();
+  loginPanel.hidden = false;
+  dashboard.hidden = true;
+  showMessage("Your admin session has expired. Please sign in again.", true);
+}
 
 function showMessage(value, isError = false) {
   message.textContent = value;
@@ -42,16 +57,47 @@ async function request(path, options = {}) {
   try {
     response = await fetch(path, {
       ...options,
-      headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}) },
+      headers: tabSessionHeaders({
+        Accept: "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers
+      }),
       credentials: "same-origin"
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    if (!dashboard.hidden && path.startsWith("/api/admin/")) {
+      clearSessionExpiry();
+      loginPanel.hidden = false;
+      dashboard.hidden = true;
+      showMessage("We couldn't verify your admin session. Please try again.", true);
+    }
     throw new Error("Could not reach the server. Check your connection and try again.");
   }
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || "That didn't work. Please try again.");
+  if (!response.ok) {
+    const error = new Error(result.error || "That didn't work. Please try again.");
+    error.status = response.status;
+    error.code = result.code;
+    if (response.status === 401 && result.code === "SESSION_EXPIRED") handleExpiredSession();
+    else if (response.status >= 500 && !dashboard.hidden && path.startsWith("/api/admin/")) {
+      clearSessionExpiry();
+      loginPanel.hidden = false;
+      dashboard.hidden = true;
+      showMessage("We couldn't verify your admin session. Please try again.", true);
+    }
+    throw error;
+  }
+  if (path.startsWith("/api/admin/")) observeSessionExpiry(response, handleExpiredSession);
   return result;
 }
+
+document.querySelectorAll("[data-show-password]").forEach((toggle) => {
+  toggle.addEventListener("change", () => {
+    const input = document.getElementById(toggle.getAttribute("aria-controls"));
+    if (input) input.type = toggle.checked ? "text" : "password";
+  });
+});
 
 function displayOrders(orders) {
   if (!orders.length) {
@@ -91,6 +137,8 @@ function displayOrders(orders) {
 }
 
 function displayReviews(reviews) {
+  for (const url of reviewPhotoObjectUrls) URL.revokeObjectURL(url);
+  reviewPhotoObjectUrls.clear();
   if (!reviews.length) {
     reviewList.innerHTML = '<div class="account-card account-empty"><p>No reviews match this queue yet.</p></div>';
     return;
@@ -98,16 +146,47 @@ function displayReviews(reviews) {
   reviewList.innerHTML = reviews.map((review) => `
     <article class="account-card admin-review-card">
       <header class="admin-review-header"><div><p class="eyebrow">${escapeHtml(review.status)}</p><h4>${escapeHtml(review.customerName)}</h4></div><span class="status-pill">${escapeHtml(`${review.rating}/5`)} ★</span></header>
-      <p class="admin-review-copy">${escapeHtml(review.reviewText)}</p>
-      <div class="admin-review-meta"><span>Product: ${escapeHtml(review.productId)}</span><span>${escapeHtml(new Date(review.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }))}</span></div>
-      ${review.photos?.length ? `<div class="admin-review-photos">${review.photos.map((photo) => `<img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText)}" loading="lazy">`).join("")}</div>` : ""}
+      ${review.reviewTitle ? `<h5>${escapeHtml(review.reviewTitle)}</h5>` : ""}
+      ${review.reviewText ? `<p class="admin-review-copy">${escapeHtml(review.reviewText)}</p>` : ""}
+      <div class="admin-review-meta"><span>Product: ${escapeHtml(review.productName || review.productId)}</span><span>Order: ${escapeHtml(review.orderNumber || review.orderId)}</span><span>${escapeHtml(new Date(review.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }))}</span></div>
+      ${review.photos?.length ? `<div class="admin-review-photos">${review.photos.map((photo) => `<img data-review-photo="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.altText)}" loading="lazy">`).join("")}</div>` : ""}
       ${review.status === "approved" ? `<label class="field"><input type="checkbox" data-feature-toggle="${escapeHtml(review.id)}" ${review.isFeatured ? "checked" : ""}>Feature this review</label>` : ""}
+      <label class="field admin-review-note">Moderation note <input type="text" maxlength="400" data-review-note="${escapeHtml(review.id)}" value="${escapeHtml(review.adminNote)}"></label>
+      ${review.moderationHistory?.length ? `<details class="admin-review-history"><summary>Moderation history (${review.moderationHistory.length})</summary><ol>${review.moderationHistory.map((entry) => `<li><strong>${escapeHtml(entry.action)}</strong><span>${escapeHtml(entry.actor)} · ${escapeHtml(new Date(entry.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }))}</span>${entry.previousStatus || entry.nextStatus ? `<small>${escapeHtml(entry.previousStatus || "new")} → ${escapeHtml(entry.nextStatus || "removed")}</small>` : ""}${entry.note ? `<p>${escapeHtml(entry.note)}</p>` : ""}</li>`).join("")}</ol></details>` : ""}
       <div class="admin-review-actions">
-        ${review.status !== "approved" ? `<button class="button button-primary" type="button" data-review-action="approve" data-review-id="${escapeHtml(review.id)}">Approve</button>` : ""}
-        ${review.status !== "rejected" ? `<button class="button button-outline" type="button" data-review-action="reject" data-review-id="${escapeHtml(review.id)}">Reject</button>` : ""}
+        ${review.status !== "approved" ? `<button class="button button-primary" type="button" data-review-action="approve" data-review-id="${escapeHtml(review.id)}">${review.status === "hidden" ? "Restore review" : "Approve"}</button>` : ""}
+        ${review.status !== "rejected" && review.status !== "hidden" ? `<button class="button button-outline" type="button" data-review-action="reject" data-review-id="${escapeHtml(review.id)}">Reject</button>` : ""}
+        ${review.status !== "hidden" ? `<button class="button button-outline" type="button" data-review-action="hide" data-review-id="${escapeHtml(review.id)}">Hide</button>` : ""}
+        <button class="button button-outline" type="button" data-review-action="delete" data-review-id="${escapeHtml(review.id)}">Delete permanently</button>
       </div>
     </article>
   `).join("");
+  loadReviewPhotos().catch((error) => showMessage(error.message, true));
+}
+
+async function loadReviewPhotos() {
+  const images = [...reviewList.querySelectorAll("[data-review-photo]")];
+  for (const image of images) {
+    const response = await fetch(image.dataset.reviewPhoto, {
+      headers: tabSessionHeaders({ Accept: "image/*" }),
+      credentials: "same-origin"
+    });
+    if (!response.ok) {
+      if (response.status === 401) {
+        const body = await response.json().catch(() => ({}));
+        if (body.code === "SESSION_EXPIRED") handleExpiredSession();
+      }
+      throw new Error("Unable to load a review photo. Please refresh the moderation queue.");
+    }
+    observeSessionExpiry(response, handleExpiredSession);
+    const objectUrl = URL.createObjectURL(await response.blob());
+    if (image.isConnected) {
+      reviewPhotoObjectUrls.add(objectUrl);
+      image.src = objectUrl;
+    } else {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
 }
 
 async function loadReviews(status = "pending") {
@@ -240,15 +319,26 @@ if (reviewList) {
     const action = event.target.closest("[data-review-action]");
     if (!action) return;
     const id = action.dataset.reviewId;
-    const status = action.dataset.reviewAction === "approve" ? "approved" : "rejected";
+    const actionName = action.dataset.reviewAction;
+    const card = action.closest(".admin-review-card");
+    const adminNote = card.querySelector(`[data-review-note="${CSS.escape(id)}"]`)?.value || "";
+    if (actionName === "delete" && !window.confirm("Delete this review and its photos permanently? This action cannot be undone.")) return;
     try {
-      await request(`/api/admin/reviews/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status })
-      });
+      if (actionName === "delete") {
+        await request(`/api/admin/reviews/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ adminNote })
+        });
+      } else {
+        const status = actionName === "approve" ? "approved" : actionName === "reject" ? "rejected" : "hidden";
+        await request(`/api/admin/reviews/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status, adminNote })
+        });
+      }
       const activeTab = document.querySelector(".review-tab.is-active")?.dataset.reviewTab || "pending";
       await loadReviews(activeTab);
-      showMessage(`Review marked as ${status}.`);
+      showMessage(actionName === "delete" ? "Review permanently deleted." : `Review ${actionName === "hide" ? "hidden" : actionName === "approve" ? "approved" : "rejected"}.`);
     } catch (error) {
       showMessage(error.message, true);
     }
@@ -258,9 +348,13 @@ if (reviewList) {
     const toggle = event.target.closest("[data-feature-toggle]");
     if (!toggle) return;
     try {
+      const card = toggle.closest(".admin-review-card");
       await request(`/api/admin/reviews/${encodeURIComponent(toggle.dataset.featureToggle)}`, {
         method: "PATCH",
-        body: JSON.stringify({ isFeatured: toggle.checked })
+        body: JSON.stringify({
+          isFeatured: toggle.checked,
+          adminNote: card.querySelector(`[data-review-note="${CSS.escape(toggle.dataset.featureToggle)}"]`)?.value || ""
+        })
       });
       const activeTab = document.querySelector(".review-tab.is-active")?.dataset.reviewTab || "pending";
       await loadReviews(activeTab);
@@ -273,7 +367,8 @@ if (reviewList) {
 
 document.querySelector("#admin-logout").addEventListener("click", async () => {
   try {
-    await request("/api/account/logout", { method: "POST" });
+    await request("/api/admin/logout", { method: "POST" });
+    clearSessionExpiry();
     loginPanel.hidden = false;
     dashboard.hidden = true;
     showMessage("Signed out.");
@@ -293,6 +388,9 @@ document.querySelector(".menu-toggle")?.addEventListener("click", (event) => {
 loadOrders().catch((error) => {
   loginPanel.hidden = false;
   dashboard.hidden = true;
-  if (error.message.includes("administrator")) showMessage("");
+  if (error.code === "SESSION_EXPIRED") showMessage(error.message, true);
+  else if (error.message.includes("administrator")) showMessage("");
   else showMessage(error.message, true);
 });
+
+if (tabSessionError) showMessage(tabSessionError, true);

@@ -2,7 +2,6 @@ import { createHash, createHmac, randomBytes, randomInt, randomUUID, scrypt as c
 import { promisify } from "node:util";
 
 const scrypt = promisify(callbackScrypt);
-const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 const resetLifetimeMs = 60 * 60 * 1000;
 const orderStatuses = new Set([
   "Order Placed",
@@ -88,6 +87,7 @@ function safeReview(row) {
     orderId: row.order_id,
     customerName: row.customer_name,
     rating: Number(row.rating),
+    reviewTitle: row.review_title || "",
     reviewText: row.review_text,
     status: row.status,
     isFeatured: Boolean(row.is_featured),
@@ -95,7 +95,11 @@ function safeReview(row) {
     approvedAt: row.approved_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    photos: Array.isArray(row.photos) ? row.photos : []
+    orderNumber: row.order_number || "",
+    orderCustomerName: row.order_customer_name || "",
+    productName: row.product_name || "",
+    photos: Array.isArray(row.photos) ? row.photos : [],
+    moderationHistory: Array.isArray(row.moderation_history) ? row.moderation_history : []
   };
 }
 
@@ -107,28 +111,96 @@ function hashOtpCode(code, secret) {
   return createHmac("sha256", secret).update(String(code)).digest("hex");
 }
 
-export function createAccountService({ database, emailService, environment }) {
-  const otpSecret = String(environment.OTP_SECRET || "");
+function timeoutValue(environment, name, fallback, maximum) {
+  const value = environment[name] === undefined || environment[name] === ""
+    ? fallback
+    : Number(environment[name]);
+  if (!Number.isInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${name} must be a whole number between 1 and ${maximum}.`);
+  }
+  return value;
+}
 
-  async function createSession(customerId, role = "customer", customerEmail = null) {
+export function createAccountService({ database, emailService, environment }) {
+  const otpSecret = String(environment.OTP_SECRET ?? "");
+  const sessionTimeouts = {
+    customer: {
+      idleMinutes: timeoutValue(environment, "CUSTOMER_SESSION_IDLE_TIMEOUT_MINUTES", 30, 1440),
+      maxHours: timeoutValue(environment, "CUSTOMER_SESSION_MAX_LIFETIME_HOURS", 8, 168)
+    },
+    admin: {
+      idleMinutes: timeoutValue(environment, "ADMIN_SESSION_IDLE_TIMEOUT_MINUTES", 30, 1440),
+      maxHours: timeoutValue(environment, "ADMIN_SESSION_MAX_LIFETIME_HOURS", 8, 168)
+    }
+  };
+
+  async function createSession(customerId, role, customerEmail, tabId) {
+    if (!sessionTimeouts[role]) throw new Error("Cannot create a session for an unsupported role.");
+    if (!/^[\da-f]{32}$/i.test(tabId || "")) throw new Error("A valid tab session identifier is required.");
     const token = randomBytes(32).toString("base64url");
-    const expiresAt = new Date(Date.now() + sessionLifetimeMs);
+    const now = Date.now();
+    const expiresAt = new Date(now + sessionTimeouts[role].maxHours * 60 * 60 * 1000);
+    const idleExpiresAt = new Date(Math.min(now + sessionTimeouts[role].idleMinutes * 60 * 1000, expiresAt.getTime()));
     const normalizedEmail = customerEmail ? normalizeEmail(customerEmail) : null;
-    await database.query(
-      "INSERT INTO customer_sessions (token_hash, customer_id, role, expires_at, customer_email) VALUES ($1, $2, $3, $4, $5)",
-      [hashToken(token), customerId, role, expiresAt, normalizedEmail]
-    );
-    return { token, expiresAt };
+    if (role === "admin") {
+      await database.query(
+        `INSERT INTO admin_sessions (token_hash, expires_at, idle_expires_at, tab_id)
+         VALUES ($1, $2, $3, $4)`,
+        [hashToken(token), expiresAt, idleExpiresAt, tabId]
+      );
+    } else {
+      await database.query(
+        `INSERT INTO customer_sessions
+         (token_hash, customer_id, role, expires_at, customer_email, idle_expires_at, tab_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [hashToken(token), customerId, role, expiresAt, normalizedEmail, idleExpiresAt, tabId]
+      );
+    }
+    return { token, expiresAt, idleExpiresAt };
   }
 
-  async function resolveSession(token) {
-    if (!token) return null;
+  async function resolveSession(token, role, tabId, userActivity = false) {
+    if (!token || !sessionTimeouts[role] || !/^[\da-f]{32}$/i.test(tabId || "")) return null;
+    const tokenHash = hashToken(token);
+    if (role === "admin") {
+      if (userActivity) {
+        const active = await database.query(
+          `UPDATE admin_sessions
+           SET idle_expires_at = LEAST(NOW() + ($3 * INTERVAL '1 minute'), expires_at)
+           WHERE token_hash = $1 AND tab_id = $2
+             AND expires_at > NOW() AND idle_expires_at > NOW()
+           RETURNING token_hash`,
+          [tokenHash, tabId, sessionTimeouts.admin.idleMinutes]
+        );
+        if (!active.rows.length) return null;
+      }
+      const result = await database.query(
+        `SELECT 'admin' AS role, NULL::uuid AS customer_id, NULL::text AS customer_email,
+          expires_at, idle_expires_at, NULL::text AS name, NULL::text AS email
+         FROM admin_sessions
+         WHERE token_hash = $1 AND tab_id = $2 AND expires_at > NOW() AND idle_expires_at > NOW()`,
+        [tokenHash, tabId]
+      );
+      return result.rows[0] || null;
+    }
+    if (userActivity) {
+      const active = await database.query(
+        `UPDATE customer_sessions
+         SET idle_expires_at = LEAST(NOW() + ($4 * INTERVAL '1 minute'), expires_at)
+         WHERE token_hash = $1 AND role = $2 AND tab_id = $3
+           AND expires_at > NOW() AND idle_expires_at > NOW()
+         RETURNING token_hash`,
+        [tokenHash, role, tabId, sessionTimeouts[role].idleMinutes]
+      );
+      if (!active.rows.length) return null;
+    }
     const result = await database.query(
-      `SELECT s.role, s.customer_id, s.customer_email, s.expires_at, c.name, c.email
+      `SELECT s.role, s.customer_id, s.customer_email, s.expires_at, s.idle_expires_at, c.name, c.email
        FROM customer_sessions s
        LEFT JOIN customers c ON c.id = s.customer_id
-       WHERE s.token_hash = $1 AND s.expires_at > NOW()`,
-      [hashToken(token)]
+       WHERE s.token_hash = $1 AND s.role = $2 AND s.tab_id = $3
+         AND s.expires_at > NOW() AND s.idle_expires_at > NOW()`,
+      [tokenHash, role, tabId]
     );
     const session = result.rows[0];
     if (!session) return null;
@@ -139,7 +211,7 @@ export function createAccountService({ database, emailService, environment }) {
     };
   }
 
-  async function register({ name, email, phone, password }) {
+  async function register({ name, email, phone, password }, tabId) {
     const passwordHash = await hashPassword(password);
     const id = randomUUID();
     const result = await database.query(
@@ -148,11 +220,11 @@ export function createAccountService({ database, emailService, environment }) {
        RETURNING id, name, email, phone`,
       [id, name, email, phone, passwordHash]
     );
-    const session = await createSession(id, "customer", result.rows[0].email);
+    const session = await createSession(id, "customer", result.rows[0].email, tabId);
     return { customer: result.rows[0], session };
   }
 
-  async function login(email, password) {
+  async function login(email, password, tabId) {
     const result = await database.query(
       "SELECT id, name, email, phone, password_hash FROM customers WHERE email = LOWER($1)",
       [email]
@@ -163,17 +235,17 @@ export function createAccountService({ database, emailService, environment }) {
       return null;
     }
     if (!await verifyPassword(password, customer.password_hash)) return null;
-    const session = await createSession(customer.id, "customer", customer.email);
+    const session = await createSession(customer.id, "customer", customer.email, tabId);
     return {
       customer: { id: customer.id, name: customer.name, email: customer.email, phone: customer.phone },
       session
     };
   }
 
-  async function adminLogin(email, password) {
-    const configuredEmail = String(environment.ADMIN_EMAIL || "").trim().toLowerCase();
-    const configuredPassword = environment.ADMIN_PASSWORD || "";
-    if (!configuredEmail || configuredPassword.length < 16) return null;
+  async function adminLogin(email, password, tabId) {
+    const configuredEmail = String(environment.ADMIN_EMAIL ?? "").trim().toLowerCase();
+    const configuredPassword = String(environment.ADMIN_PASSWORD ?? "");
+    if (!configuredEmail || configuredPassword.trim().length < 16) return null;
     const suppliedEmail = Buffer.from(String(email || "").trim().toLowerCase());
     const expectedEmail = Buffer.from(configuredEmail);
     const suppliedPassword = createHash("sha256").update(String(password || "")).digest();
@@ -181,7 +253,7 @@ export function createAccountService({ database, emailService, environment }) {
     const emailMatches = suppliedEmail.length === expectedEmail.length && timingSafeEqual(suppliedEmail, expectedEmail);
     const passwordMatches = timingSafeEqual(suppliedPassword, expectedPassword);
     if (!emailMatches || !passwordMatches) return null;
-    return { session: await createSession(null, "admin") };
+    return { session: await createSession(null, "admin", null, tabId) };
   }
 
   async function requestEmailOtp(email) {
@@ -189,7 +261,7 @@ export function createAccountService({ database, emailService, environment }) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       throw new Error("Enter a valid email address.");
     }
-    if (otpSecret.length < 32) {
+    if (otpSecret.trim().length < 32) {
       throw new Error("Email verification is not configured. Set OTP_SECRET to a random value of at least 32 characters.");
     }
     if (typeof emailService?.send !== "function") {
@@ -214,7 +286,7 @@ export function createAccountService({ database, emailService, environment }) {
     return { email: normalizedEmail, expiresAt };
   }
 
-  async function verifyEmailOtp(email, otp) {
+  async function verifyEmailOtp(email, otp, tabId) {
     const normalizedEmail = normalizeEmail(email);
     const inputOtp = String(otp ?? "").replace(/\D/g, "");
     const result = await database.query(
@@ -243,7 +315,7 @@ export function createAccountService({ database, emailService, environment }) {
       "UPDATE customer_email_otp_tokens SET used_at = NOW() WHERE id = $1",
       [challenge.id]
     );
-    const session = await createSession(null, "customer", normalizedEmail);
+    const session = await createSession(null, "customer", normalizedEmail, tabId);
     return { ok: true, session, customer: { email: normalizedEmail } };
   }
 
@@ -259,8 +331,13 @@ export function createAccountService({ database, emailService, environment }) {
     return Date.now() - new Date(lastRequested).getTime() < 30_000;
   }
 
-  async function logout(token) {
-    if (token) await database.query("DELETE FROM customer_sessions WHERE token_hash = $1", [hashToken(token)]);
+  async function logout(token, role = "customer") {
+    if (!token) return;
+    if (role === "admin") {
+      await database.query("DELETE FROM admin_sessions WHERE token_hash = $1", [hashToken(token)]);
+      return;
+    }
+    await database.query("DELETE FROM customer_sessions WHERE token_hash = $1", [hashToken(token)]);
   }
 
   async function requestPasswordReset(email) {
@@ -559,17 +636,32 @@ export function createAccountService({ database, emailService, environment }) {
     return false;
   }
 
-  async function getEligibleDeliveredOrderForProduct(customerId, orderId, productId) {
-    if (!customerId || !orderId || !productId) return null;
-    const result = await database.query(
-      "SELECT id, customer_id, name, items FROM orders WHERE id = $1 AND customer_id = $2 AND order_status = 'Delivered'",
-      [orderId, customerId]
+  async function findEligibleDeliveredOrder(queryable, session, orderId, productId, lock = false) {
+    if ((!session?.customer_id && !session?.customer_email) || !orderId || !productId) return null;
+    const result = await queryable.query(
+      `SELECT id, customer_id, customer_email, name, number, items
+       FROM orders
+       WHERE id = $1 AND order_status = 'Delivered' AND payment_status = 'Paid'
+         AND (($2::uuid IS NOT NULL AND customer_id = $2)
+           OR ($3::text IS NOT NULL AND LOWER(BTRIM(customer_email)) = $3))
+       ${lock ? "FOR SHARE" : ""}`,
+      [orderId, session.customer_id || null, normalizeEmail(session.customer_email) || null]
     );
     const order = result.rows[0];
     const hasProduct = Array.isArray(order?.items) && order.items.some(
       (item) => String(item?.id ?? item?.productId ?? "") === String(productId)
     );
-    return hasProduct ? { orderId: order.id, customerId: order.customer_id, customerName: order.name || null } : null;
+    return hasProduct ? {
+      orderId: order.id,
+      customerId: order.customer_id,
+      customerEmail: normalizeEmail(order.customer_email),
+      customerName: order.name || null,
+      orderNumber: order.number || ""
+    } : null;
+  }
+
+  async function getEligibleDeliveredOrderForProduct(session, orderId, productId) {
+    return findEligibleDeliveredOrder(database, session, orderId, productId);
   }
 
   async function getProductReviewSummary(productId) {
@@ -577,15 +669,22 @@ export function createAccountService({ database, emailService, environment }) {
       database.query(
         `SELECT
           COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_count,
-          ROUND(AVG(rating) FILTER (WHERE status = 'approved'), 1)::float AS average_rating
+          ROUND(AVG(rating) FILTER (WHERE status = 'approved'), 1)::float AS average_rating,
+          COUNT(*) FILTER (WHERE status = 'approved' AND rating = 1)::int AS rating_1,
+          COUNT(*) FILTER (WHERE status = 'approved' AND rating = 2)::int AS rating_2,
+          COUNT(*) FILTER (WHERE status = 'approved' AND rating = 3)::int AS rating_3,
+          COUNT(*) FILTER (WHERE status = 'approved' AND rating = 4)::int AS rating_4,
+          COUNT(*) FILTER (WHERE status = 'approved' AND rating = 5)::int AS rating_5
          FROM product_reviews WHERE product_id = $1`,
         [productId]
       ),
       database.query(
-        `SELECT pr.rating, pr.review_text, pr.created_at, pr.approved_at, o.name AS order_customer_name,
+        `SELECT pr.id, pr.rating, pr.review_title, pr.review_text, pr.created_at, pr.approved_at,
+          o.name AS order_customer_name,
           COALESCE(json_agg(json_build_object(
           'id', prp.id,
-          'url', prp.storage_reference,
+          'url', CASE WHEN prp.storage_reference LIKE '/uploads/reviews/%'
+            THEN prp.storage_reference ELSE '/api/review-photos/' || prp.id::text END,
           'altText', prp.alt_text,
           'sortOrder', prp.sort_order
         ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
@@ -607,11 +706,17 @@ export function createAccountService({ database, emailService, environment }) {
     return {
       summary: {
         totalReviews: approvedCount,
-        averageRating: approvedCount ? Number(averageRating.toFixed(1)) : 0
+        averageRating: approvedCount ? Number(averageRating.toFixed(1)) : 0,
+        ratingDistribution: [1, 2, 3, 4, 5].map((rating) => ({
+          rating,
+          count: Number(summary[`rating_${rating}`] || 0)
+        }))
       },
       featuredReviews: featuredResult.rows.map((row) => ({
+        id: row.id,
         customerName: String(row.order_customer_name || "").trim() || "Verified customer",
         rating: Number(row.rating),
+        reviewTitle: row.review_title || "",
         reviewText: row.review_text,
         createdAt: row.created_at,
         photos: Array.isArray(row.photos) ? row.photos : []
@@ -619,70 +724,140 @@ export function createAccountService({ database, emailService, environment }) {
     };
   }
 
-  async function listOrderReviews(customerId, orderId) {
+  async function listApprovedProductReviews(productId, limit = 6, offset = 0) {
     const result = await database.query(
-      `SELECT pr.product_id, pr.status FROM product_reviews pr
+      `SELECT pr.id, pr.rating, pr.review_title, pr.review_text, pr.created_at,
+        o.name AS order_customer_name,
+        COALESCE(json_agg(json_build_object(
+          'id', prp.id,
+          'url', CASE WHEN prp.storage_reference LIKE '/uploads/reviews/%'
+            THEN prp.storage_reference ELSE '/api/review-photos/' || prp.id::text END,
+          'altText', prp.alt_text,
+          'sortOrder', prp.sort_order
+        ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
+       FROM product_reviews pr
        JOIN orders o ON o.id = pr.order_id
-       WHERE o.id = $1 AND o.customer_id = $2`,
-      [orderId, customerId]
+       LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
+       WHERE pr.product_id = $1 AND pr.status = 'approved'
+       GROUP BY pr.id, o.name
+       ORDER BY pr.approved_at DESC NULLS LAST, pr.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [productId, limit, offset]
     );
-    return result.rows.map((row) => ({ productId: row.product_id, status: row.status }));
+    return result.rows.map((row) => ({
+      id: row.id,
+      customerName: String(row.order_customer_name || "").trim() || "Verified customer",
+      rating: Number(row.rating),
+      reviewTitle: row.review_title || "",
+      reviewText: row.review_text,
+      createdAt: row.created_at,
+      photos: Array.isArray(row.photos) ? row.photos : []
+    }));
   }
 
-  async function submitProductReview({ productId, customerId, reviewText, rating, orderId, photos = [] }) {
+  async function listOrderReviews(session, orderId) {
+    const result = await database.query(
+      `SELECT pr.id, pr.product_id, pr.status, pr.rating, pr.review_title, pr.review_text FROM product_reviews pr
+       JOIN orders o ON o.id = pr.order_id
+       WHERE o.id = $1
+         AND (($2::uuid IS NOT NULL AND o.customer_id = $2)
+           OR ($3::text IS NOT NULL AND LOWER(BTRIM(o.customer_email)) = $3))`,
+      [orderId, session?.customer_id || null, normalizeEmail(session?.customer_email) || null]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      productId: row.product_id,
+      status: row.status,
+      rating: Number(row.rating),
+      reviewTitle: row.review_title || "",
+      reviewText: row.review_text || ""
+    }));
+  }
+
+  async function submitProductReview({ productId, session, reviewTitle, reviewText, rating, orderId, photos = [] }) {
     const normalizedProductId = String(productId || "").trim();
+    const normalizedTitle = String(reviewTitle || "").trim();
     const normalizedReview = String(reviewText || "").trim();
     const safeRating = Number(rating);
     if (!normalizedProductId) throw new Error("Choose a product to review.");
     if (!Number.isInteger(safeRating) || safeRating < 1 || safeRating > 5) throw new Error("Choose a rating between 1 and 5 stars.");
-    if (normalizedReview.length < 8 || normalizedReview.length > 1000) throw new Error("Write a review between 8 and 1,000 characters.");
-    const order = await getEligibleDeliveredOrderForProduct(customerId, orderId, normalizedProductId);
-    if (!order) {
-      const error = new Error("Only customers with a delivered order for this product can leave a review.");
-      error.status = 403;
-      throw error;
-    }
-
+    if (normalizedTitle.length > 120 || normalizedReview.length > 1000) throw new Error("Keep your review title under 120 characters and review under 1,000 characters.");
     const reviewId = randomUUID();
-    const result = await database.query(
-      `INSERT INTO product_reviews (id, product_id, customer_id, order_id, customer_name, rating, review_text, status, is_featured)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', FALSE)
-       ON CONFLICT (product_id, customer_id, order_id) DO NOTHING
-       RETURNING *`,
-      [reviewId, normalizedProductId, customerId, order.orderId, order.customerName || "Verified customer", safeRating, normalizedReview]
-    );
-    const review = result.rows[0];
-    if (!review) {
-      const error = new Error("You have already reviewed this product from that purchase.");
-      error.status = 409;
-      throw error;
-    }
-    for (const [index, photo] of (photos || []).entries()) {
-      const storageReference = photo.url || photo.storageReference || "";
-      if (!storageReference) continue;
-      await database.query(
-        `INSERT INTO product_review_photos (id, review_id, storage_reference, alt_text, sort_order)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [randomUUID(), review.id, storageReference, photo.altText || `Customer review photo ${index + 1}`, index]
+    const client = await database.connect();
+    try {
+      await client.query("BEGIN");
+      const order = await findEligibleDeliveredOrder(client, session, orderId, normalizedProductId, true);
+      if (!order) {
+        const error = new Error("Only customers with a paid, delivered order for this product can leave a review.");
+        error.status = 403;
+        throw error;
+      }
+      const result = await client.query(
+        `INSERT INTO product_reviews
+          (id, product_id, customer_id, customer_email, order_id, customer_name, rating, review_title, review_text, status, is_featured)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', FALSE)
+         ON CONFLICT DO NOTHING RETURNING *`,
+        [
+          reviewId, normalizedProductId, session?.customer_id || null, order.customerEmail,
+          order.orderId, order.customerName || "Verified customer", safeRating, normalizedTitle, normalizedReview
+        ]
       );
+      const review = result.rows[0];
+      if (!review) {
+        const error = new Error("You have already reviewed this product from that purchase.");
+        error.status = 409;
+        throw error;
+      }
+      for (const [index, photo] of photos.entries()) {
+        const storageReference = photo.storageReference || photo.url || "";
+        if (!storageReference) continue;
+        await client.query(
+          `INSERT INTO product_review_photos (id, review_id, storage_reference, alt_text, sort_order)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [photo.id || randomUUID(), review.id, storageReference, photo.altText || `Customer review photo ${index + 1}`, index]
+        );
+      }
+      await client.query("COMMIT");
+      return safeReview(review);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "23505") {
+        const duplicateError = new Error("You have already reviewed this product from that purchase.");
+        duplicateError.status = 409;
+        throw duplicateError;
+      }
+      throw error;
+    } finally {
+      client.release();
     }
-    return safeReview(review);
   }
 
   async function listAdminReviews(status = null) {
-    const clauses = status ? "WHERE pr.status = $1" : "WHERE pr.status IN ('pending', 'approved', 'rejected')";
+    const clauses = status ? "WHERE pr.status = $1" : "WHERE pr.status IN ('pending', 'approved', 'rejected', 'hidden')";
     const params = status ? [status] : [];
     const result = await database.query(
-      `SELECT pr.*, COALESCE(json_agg(json_build_object(
+      `SELECT pr.*, o.number AS order_number, o.name AS order_customer_name,
+       (SELECT COALESCE(json_agg(json_build_object(
+          'actor', actor,
+          'action', action,
+          'previousStatus', previous_status,
+          'nextStatus', next_status,
+          'note', note,
+          'createdAt', created_at
+        ) ORDER BY created_at DESC), '[]'::json)
+        FROM product_review_moderation_events WHERE review_id = pr.id) AS moderation_history,
+       COALESCE(json_agg(json_build_object(
         'id', prp.id,
-        'url', prp.storage_reference,
+        'url', CASE WHEN prp.storage_reference LIKE '/uploads/reviews/%'
+          THEN prp.storage_reference ELSE '/api/review-photos/' || prp.id::text END,
         'altText', prp.alt_text,
         'sortOrder', prp.sort_order
       ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
        FROM product_reviews pr
+       LEFT JOIN orders o ON o.id = pr.order_id
        LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
        ${clauses}
-       GROUP BY pr.id
+       GROUP BY pr.id, o.number, o.name
        ORDER BY pr.created_at DESC`,
       params
     );
@@ -700,7 +875,8 @@ export function createAccountService({ database, emailService, environment }) {
       }
       const row = current.rows[0];
       const nextStatus = status || row.status;
-      const nextFeatured = typeof isFeatured === "boolean" ? isFeatured : row.is_featured;
+      const nextFeatured = nextStatus === "approved"
+        && (typeof isFeatured === "boolean" ? isFeatured : row.is_featured);
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [row.product_id]);
       if (nextStatus === "rejected") {
         await client.query(
@@ -713,7 +889,6 @@ export function createAccountService({ database, emailService, environment }) {
           [row.product_id, reviewId]
         );
         if (nextFeatured && featuredCount.rows[0].count >= 2) {
-          await client.query("ROLLBACK");
           const error = new Error("Only two featured reviews can be active for a product at once.");
           error.status = 409;
           throw error;
@@ -728,6 +903,23 @@ export function createAccountService({ database, emailService, environment }) {
           [nextStatus, String(adminNote || row.admin_note || ""), reviewId]
         );
       }
+      if (nextStatus !== row.status) {
+        const action = nextStatus === "approved" && row.status === "hidden" ? "restored" : nextStatus;
+        await client.query(
+          `INSERT INTO product_review_moderation_events
+            (id, review_id, action, previous_status, next_status, note)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [randomUUID(), reviewId, action, row.status, nextStatus, String(adminNote || "")]
+        );
+      }
+      if (nextFeatured !== Boolean(row.is_featured)) {
+        await client.query(
+          `INSERT INTO product_review_moderation_events
+            (id, review_id, action, previous_status, next_status, note)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [randomUUID(), reviewId, nextFeatured ? "featured" : "unfeatured", row.status, nextStatus, String(adminNote || "")]
+        );
+      }
       await client.query("COMMIT");
       return await getReviewById(reviewId);
     } catch (error) {
@@ -738,14 +930,80 @@ export function createAccountService({ database, emailService, environment }) {
     }
   }
 
+  async function deleteProductReview(reviewId, note = "") {
+    const client = await database.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query(
+        "SELECT status FROM product_reviews WHERE id = $1 FOR UPDATE",
+        [reviewId]
+      );
+      if (!current.rows[0]) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      const selected = await client.query(
+        `SELECT COALESCE(array_agg(storage_reference), '{}') AS photo_references
+         FROM product_review_photos WHERE review_id = $1`,
+        [reviewId]
+      );
+      await client.query(
+        `INSERT INTO product_review_moderation_events
+          (id, review_id, action, previous_status, next_status, note)
+         VALUES ($1, $2, 'deleted', $3, NULL, $4)`,
+        [randomUUID(), reviewId, current.rows[0].status, String(note || "")]
+      );
+      await client.query("DELETE FROM product_reviews WHERE id = $1", [reviewId]);
+      await client.query("COMMIT");
+      return { photoReferences: selected.rows[0].photo_references || [] };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function getReviewPhoto(photoId) {
+    const result = await database.query(
+      `SELECT pr.status, prp.storage_reference
+       FROM product_review_photos prp
+       JOIN product_reviews pr ON pr.id = prp.review_id
+       WHERE prp.id = $1`,
+      [photoId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async function getReviewPhotoByReference(storageReference) {
+    const result = await database.query(
+      `SELECT pr.status, prp.storage_reference
+       FROM product_review_photos prp
+       JOIN product_reviews pr ON pr.id = prp.review_id
+       WHERE prp.storage_reference = $1`,
+      [storageReference]
+    );
+    return result.rows[0] || null;
+  }
+
   async function getReviewById(reviewId) {
     const result = await database.query(
       `SELECT pr.*, COALESCE(json_agg(json_build_object(
         'id', prp.id,
-        'url', prp.storage_reference,
+        'url', CASE WHEN prp.storage_reference LIKE '/uploads/reviews/%'
+          THEN prp.storage_reference ELSE '/api/review-photos/' || prp.id::text END,
         'altText', prp.alt_text,
         'sortOrder', prp.sort_order
-      ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos
+      ) ORDER BY prp.sort_order, prp.created_at) FILTER (WHERE prp.id IS NOT NULL), '[]'::json) AS photos,
+      (SELECT COALESCE(json_agg(json_build_object(
+        'actor', actor,
+        'action', action,
+        'previousStatus', previous_status,
+        'nextStatus', next_status,
+        'note', note,
+        'createdAt', created_at
+      ) ORDER BY created_at DESC), '[]'::json)
+       FROM product_review_moderation_events WHERE review_id = pr.id) AS moderation_history
        FROM product_reviews pr
        LEFT JOIN product_review_photos prp ON prp.review_id = pr.id
        WHERE pr.id = $1
@@ -967,10 +1225,14 @@ export function createAccountService({ database, emailService, environment }) {
     requestCancellationForSession,
     getEligibleDeliveredOrderForProduct,
     getProductReviewSummary,
+    listApprovedProductReviews,
     listOrderReviews,
     submitProductReview,
     listAdminReviews,
     updateReviewModeration,
+    deleteProductReview,
+    getReviewPhoto,
+    getReviewPhotoByReference,
     listAdminOrders,
     updateAdminOrder,
     getAdminOrder,

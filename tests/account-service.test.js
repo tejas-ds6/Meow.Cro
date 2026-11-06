@@ -3,13 +3,87 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createAccountService } from "../server/account-service.js";
 
+const customerTabId = "a".repeat(32);
+const adminTabId = "b".repeat(32);
+
+function handleSessionQuery(sql, values, sessions, adminSessions, customers = new Map()) {
+  const isAdmin = sql.includes("admin_sessions");
+  const store = isAdmin ? adminSessions : sessions;
+  if (sql.includes("INSERT INTO customer_sessions")) {
+    const [token_hash, customer_id, role, expires_at, customer_email, idle_expires_at, tab_id] = values;
+    store.set(token_hash, { token_hash, customer_id, role, expires_at, customer_email, idle_expires_at, tab_id });
+    return { rows: [] };
+  }
+  if (sql.includes("INSERT INTO admin_sessions")) {
+    const [token_hash, expires_at, idle_expires_at, tab_id] = values;
+    store.set(token_hash, { token_hash, role: "admin", expires_at, idle_expires_at, tab_id });
+    return { rows: [] };
+  }
+  if (sql.includes("UPDATE customer_sessions") && sql.includes("idle_expires_at")) {
+    const [tokenHash, role, tabId, idleMinutes] = values;
+    const session = store.get(tokenHash);
+    if (!session || session.role !== role || session.tab_id !== tabId ||
+      session.expires_at <= new Date() || session.idle_expires_at <= new Date()) return { rows: [] };
+    session.idle_expires_at = new Date(Math.min(Date.now() + idleMinutes * 60_000, session.expires_at.getTime()));
+    return { rows: [{ token_hash: tokenHash }] };
+  }
+  if (sql.includes("UPDATE admin_sessions") && sql.includes("idle_expires_at")) {
+    const [tokenHash, tabId, idleMinutes] = values;
+    const session = store.get(tokenHash);
+    if (!session || session.tab_id !== tabId ||
+      session.expires_at <= new Date() || session.idle_expires_at <= new Date()) return { rows: [] };
+    session.idle_expires_at = new Date(Math.min(Date.now() + idleMinutes * 60_000, session.expires_at.getTime()));
+    return { rows: [{ token_hash: tokenHash }] };
+  }
+  if (sql.includes("FROM customer_sessions s")) {
+    const [tokenHash, role, tabId] = values;
+    const session = store.get(tokenHash);
+    const customer = [...customers.values()].find((item) => item.id === session?.customer_id);
+    return {
+      rows: session && session.role === role && session.tab_id === tabId &&
+        session.expires_at > new Date() && session.idle_expires_at > new Date()
+        ? [{ ...session, name: customer?.name || null, email: customer?.email || session.customer_email || null }]
+        : []
+    };
+  }
+  if (sql.includes("SELECT 'admin'")) {
+    const [tokenHash, tabId] = values;
+    const session = store.get(tokenHash);
+    return {
+        rows: session && session.tab_id === tabId &&
+          session.expires_at > new Date() && session.idle_expires_at > new Date()
+          ? [{ ...session, customer_id: null, customer_email: null, email: null, name: null }]
+          : []
+    };
+  }
+  if (sql.includes("DELETE FROM customer_sessions WHERE token_hash")) {
+    sessions.delete(values[0]);
+    return { rows: [] };
+  }
+  if (sql.includes("DELETE FROM admin_sessions WHERE token_hash")) {
+    adminSessions.delete(values[0]);
+    return { rows: [] };
+  }
+  if (sql.includes("DELETE FROM customer_sessions WHERE customer_id")) {
+    for (const [hash, session] of sessions) {
+      if (session.customer_id === values[0]) sessions.delete(hash);
+    }
+    return { rows: [] };
+  }
+  return null;
+}
+
 function createMemoryDatabase() {
   const customers = new Map();
   const sessions = new Map();
+  const adminSessions = new Map();
   return {
     customers,
     sessions,
+    adminSessions,
     async query(sql, values = []) {
+      const sessionResult = handleSessionQuery(sql, values, sessions, adminSessions, customers);
+      if (sessionResult) return sessionResult;
       if (sql.includes("INSERT INTO customers")) {
         const [id, name, email, phone, password_hash] = values;
         const customer = { id, name, email: email.toLowerCase(), phone, password_hash };
@@ -19,20 +93,6 @@ function createMemoryDatabase() {
       if (sql.includes("SELECT id, name, email, phone, password_hash FROM customers")) {
         const customer = customers.get(String(values[0]).toLowerCase());
         return { rows: customer ? [customer] : [] };
-      }
-      if (sql.includes("INSERT INTO customer_sessions")) {
-        const [token_hash, customer_id, role, expires_at] = values;
-        sessions.set(token_hash, { token_hash, customer_id, role, expires_at });
-        return { rows: [] };
-      }
-      if (sql.includes("FROM customer_sessions s")) {
-        const session = sessions.get(values[0]);
-        const customer = [...customers.values()].find((item) => item.id === session?.customer_id);
-        return {
-          rows: session
-            ? [{ ...session, name: customer?.name || null, email: customer?.email || null }]
-            : []
-        };
       }
       throw new Error(`Unexpected SQL in account service test: ${sql}`);
     }
@@ -143,10 +203,14 @@ function createOrderMemoryDatabase() {
 function createOtpMemoryDatabase() {
   const challenges = [];
   const sessions = new Map();
+  const adminSessions = new Map();
   return {
     challenges,
     sessions,
+    adminSessions,
     async query(sql, values = []) {
+      const sessionResult = handleSessionQuery(sql, values, sessions, adminSessions);
+      if (sessionResult) return sessionResult;
       if (sql.includes("UPDATE customer_email_otp_tokens SET used_at = NOW() WHERE email = $1")) {
         for (const challenge of challenges) {
           if (challenge.email === values[0] && !challenge.used_at && challenge.expires_at > new Date()) {
@@ -175,11 +239,6 @@ function createOtpMemoryDatabase() {
         if (challenge) challenge.used_at = new Date();
         return { rows: [] };
       }
-      if (sql.includes("INSERT INTO customer_sessions")) {
-        const [token_hash, customer_id, role, expires_at, customer_email] = values;
-        sessions.set(token_hash, { token_hash, customer_id, role, expires_at, customer_email });
-        return { rows: [] };
-      }
       throw new Error(`Unexpected SQL in OTP test: ${sql}`);
     }
   };
@@ -201,16 +260,17 @@ test("email OTP is cryptographically generated, hashed, expiring, and creates a 
   assert.notEqual(database.challenges[0].otp_hash, messages[0].text.match(/\d{6}/)[0]);
   const otp = messages[0].text.match(/\b(\d{6})\b/)[1];
   const incorrectOtp = otp === "000001" ? "000002" : "000001";
-  const rejected = await service.verifyEmailOtp("BUYER@example.test", incorrectOtp);
+  const rejected = await service.verifyEmailOtp("BUYER@example.test", incorrectOtp, customerTabId);
   assert.equal(rejected.ok, false);
 
-  const verified = await service.verifyEmailOtp(" Buyer@example.test ", otp);
+  const verified = await service.verifyEmailOtp(" Buyer@example.test ", otp, customerTabId);
   assert.equal(verified.ok, true);
   assert.equal(verified.customer.email, "buyer@example.test");
   assert.equal(database.challenges[0].used_at instanceof Date, true);
   const session = [...database.sessions.values()][0];
   assert.equal(session.customer_id, null);
   assert.equal(session.customer_email, "buyer@example.test");
+  assert.equal(session.tab_id, customerTabId);
 });
 
 test("email OTP attempts are limited and expired codes cannot authenticate", async () => {
@@ -226,16 +286,95 @@ test("email OTP attempts are limited and expired codes cannot authenticate", asy
   const code = messages[0].text.match(/\b(\d{6})\b/)[1];
   const wrongCode = code === "999999" ? "999998" : "999999";
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const invalid = await service.verifyEmailOtp("buyer@example.test", wrongCode);
+    const invalid = await service.verifyEmailOtp("buyer@example.test", wrongCode, customerTabId);
     assert.equal(invalid.ok, false);
   }
-  const locked = await service.verifyEmailOtp("buyer@example.test", code);
+  const locked = await service.verifyEmailOtp("buyer@example.test", code, customerTabId);
   assert.equal(locked.locked, true);
   assert.equal(database.sessions.size, 0);
 
   await service.requestEmailOtp("buyer@example.test");
   database.challenges.at(-1).expires_at = new Date(Date.now() - 1);
-  assert.equal(await service.verifyEmailOtp("buyer@example.test", messages[1].text.match(/\b(\d{6})\b/)[1]), null);
+  assert.equal(await service.verifyEmailOtp("buyer@example.test", messages[1].text.match(/\b(\d{6})\b/)[1], customerTabId), null);
+});
+
+test("whitespace-only OTP secrets and admin passwords are rejected", async () => {
+  const otpDatabase = createOtpMemoryDatabase();
+  const otpService = createAccountService({
+    database: otpDatabase,
+    emailService: { send: async () => ({ id: "email_test" }) },
+    environment: { OTP_SECRET: "   " }
+  });
+  await assert.rejects(() => otpService.requestEmailOtp("buyer@example.test"), /OTP_SECRET/);
+
+  const adminService = createAccountService({
+    database: createMemoryDatabase(),
+    emailService: { send: async () => ({ id: "email_test" }) },
+    environment: { ADMIN_EMAIL: "studio@example.test", ADMIN_PASSWORD: "   " }
+  });
+  assert.equal(await adminService.adminLogin("studio@example.test", "admin-pass-12345", adminTabId), null);
+});
+
+test("invalid session timeout configuration is rejected", () => {
+  assert.throws(() => createAccountService({
+    database: createMemoryDatabase(),
+    emailService: null,
+    environment: { ADMIN_SESSION_IDLE_TIMEOUT_MINUTES: "0" }
+  }), /ADMIN_SESSION_IDLE_TIMEOUT_MINUTES/);
+});
+
+test("customer and admin sessions are role- and tab-scoped with idle and absolute expiry", async () => {
+  const database = createMemoryDatabase();
+  const service = createAccountService({
+    database,
+    emailService: { send: async () => ({ id: "email_test" }) },
+    environment: {
+      ADMIN_EMAIL: "studio@example.test",
+      ADMIN_PASSWORD: "admin-password-with-at-least-16-chars",
+      CUSTOMER_SESSION_IDLE_TIMEOUT_MINUTES: "1",
+      CUSTOMER_SESSION_MAX_LIFETIME_HOURS: "1",
+      ADMIN_SESSION_IDLE_TIMEOUT_MINUTES: "1",
+      ADMIN_SESSION_MAX_LIFETIME_HOURS: "1"
+    }
+  });
+  const customer = await service.register({
+    name: "Meow Buyer",
+    email: "buyer@example.test",
+    phone: "9876543210",
+    password: "a-secure-customer-password"
+  }, customerTabId);
+  const customerHash = createHash("sha256").update(customer.session.token).digest("hex");
+  const customerRecord = database.sessions.get(customerHash);
+
+  assert.equal((await service.resolveSession(customer.session.token, "customer", customerTabId)).role, "customer");
+  assert.equal(await service.resolveSession(customer.session.token, "admin", customerTabId), null);
+  assert.equal(await service.resolveSession(customer.session.token, "customer", "c".repeat(32)), null);
+  const idleBeforeRead = customerRecord.idle_expires_at.getTime();
+  await service.resolveSession(customer.session.token, "customer", customerTabId);
+  assert.equal(customerRecord.idle_expires_at.getTime(), idleBeforeRead, "ordinary requests must not extend idle expiry");
+
+  customerRecord.expires_at = new Date(Date.now() + 60_000);
+  customerRecord.idle_expires_at = new Date(Date.now() + 500);
+  await service.resolveSession(customer.session.token, "customer", customerTabId, true);
+  assert.ok(customerRecord.idle_expires_at <= customerRecord.expires_at, "activity must not exceed the absolute lifetime");
+
+  const admin = await service.adminLogin("studio@example.test", "admin-password-with-at-least-16-chars", adminTabId);
+  const adminHash = createHash("sha256").update(admin.session.token).digest("hex");
+  assert.equal(database.adminSessions.has(adminHash), true);
+  assert.equal(database.sessions.has(adminHash), false);
+  assert.equal((await service.resolveSession(admin.session.token, "admin", adminTabId)).role, "admin");
+  await service.logout(admin.session.token, "admin");
+  assert.equal(await service.resolveSession(admin.session.token, "admin", adminTabId), null);
+  assert.equal(database.adminSessions.has(adminHash), false);
+  assert.equal((await service.resolveSession(customer.session.token, "customer", customerTabId)).role, "customer");
+  customerRecord.idle_expires_at = new Date(Date.now() - 1);
+  assert.equal(await service.resolveSession(customer.session.token, "customer", customerTabId, true), null);
+  customerRecord.idle_expires_at = new Date(Date.now() + 60_000);
+  customerRecord.expires_at = new Date(Date.now() - 1);
+  assert.equal(await service.resolveSession(customer.session.token, "customer", customerTabId, true), null);
+  await service.logout(customer.session.token);
+  assert.equal(database.sessions.has(customerHash), false);
+  assert.equal((await service.resolveSession(customer.session.token, "customer", customerTabId)), null);
 });
 
 test("customer account passwords are hashed and sessions are opaque, expiring server records", async () => {
@@ -251,7 +390,7 @@ test("customer account passwords are hashed and sessions are opaque, expiring se
     email: "buyer@example.test",
     phone: "+91 98765 43210",
     password: "a-secure-customer-password"
-  });
+  }, customerTabId);
   const savedCustomer = database.customers.get("buyer@example.test");
   assert.match(savedCustomer.password_hash, /^scrypt\$/);
   assert.notEqual(savedCustomer.password_hash, "a-secure-customer-password");
@@ -260,8 +399,8 @@ test("customer account passwords are hashed and sessions are opaque, expiring se
   const [storedTokenHash] = [...database.sessions.entries()][0];
   assert.equal(storedTokenHash, createHash("sha256").update(registered.session.token).digest("hex"));
   assert.notEqual(storedTokenHash, registered.session.token);
-  assert.equal((await service.resolveSession(registered.session.token)).role, "customer");
-  assert.equal(await service.resolveSession("not-a-session-token"), null);
+  assert.equal((await service.resolveSession(registered.session.token, "customer", customerTabId)).role, "customer");
+  assert.equal(await service.resolveSession("not-a-session-token", "customer", customerTabId), null);
 });
 
 test("customer login verifies passwords and admin login cannot create a customer session", async () => {
@@ -277,16 +416,16 @@ test("customer login verifies passwords and admin login cannot create a customer
     email: "buyer@example.test",
     phone: "9876543210",
     password: "a-secure-customer-password"
-  });
+  }, customerTabId);
 
-  assert.equal(await service.login("buyer@example.test", "wrong-password"), null);
-  const login = await service.login("buyer@example.test", "a-secure-customer-password");
+  assert.equal(await service.login("buyer@example.test", "wrong-password", customerTabId), null);
+  const login = await service.login("buyer@example.test", "a-secure-customer-password", customerTabId);
   assert.equal(login.customer.email, "buyer@example.test");
-  assert.equal(await service.adminLogin("buyer@example.test", "a-secure-customer-password"), null);
-  assert.equal(await service.adminLogin("studio@example.test", "admin-pass-1234"), null);
-  const admin = await service.adminLogin("studio@example.test", adminPassword);
-  assert.equal((await service.resolveSession(admin.session.token)).role, "admin");
-  assert.equal((await service.resolveSession(admin.session.token)).customer_id, null);
+  assert.equal(await service.adminLogin("buyer@example.test", "a-secure-customer-password", adminTabId), null);
+  assert.equal(await service.adminLogin("studio@example.test", "admin-pass-1234", adminTabId), null);
+  const admin = await service.adminLogin("studio@example.test", adminPassword, adminTabId);
+  assert.equal((await service.resolveSession(admin.session.token, "admin", adminTabId)).role, "admin");
+  assert.equal((await service.resolveSession(admin.session.token, "admin", adminTabId)).customer_id, null);
 });
 
 test("UPI order details are stored and payment verification updates the persisted order", async () => {
