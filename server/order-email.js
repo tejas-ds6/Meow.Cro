@@ -19,6 +19,9 @@ export async function sendPaidOrderEmails(order, emailService, studioEmail) {
     "",
     "Your little bundle:",
     ...items,
+    ...(order.customOrderId && order.items[0]?.customDescription
+      ? ["", "Custom order details:", order.items[0].customDescription]
+      : []),
     "",
     `Total: ₹${order.total}`,
     `Payment method: ${order.paymentMethod || "UPI"}`,
@@ -103,6 +106,55 @@ export async function sendOrderStatusEmail(order, emailService, trackingLink, no
       actionLabel: "VIEW ORDER STATUS",
       actionUrl: trackingLink
     })
+  });
+  return true;
+}
+
+export async function sendCustomOrderOfferEmail(request, emailService, paymentLink) {
+  if (!emailService.configured) return false;
+  const message = [
+    `Hi ${request.name},`,
+    "",
+    "We'd love to make your custom crochet idea.",
+    `Your custom order price is ₹${request.quotedAmount}.`,
+    request.adminNote ? `A note from the studio: ${request.adminNote}` : "",
+    "",
+    "Review the offer, add your delivery address, and pay securely to confirm your order.",
+    `This offer expires on ${new Date(request.quoteExpiresAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}.`,
+    "",
+    "Made slowly, with love,",
+    "Meow.Cro Studio"
+  ].filter(Boolean).join("\n");
+  await emailService.send({
+    to: request.email,
+    subject: "Your Meow.Cro custom order offer is ready",
+    text: message,
+    html: renderBrandedEmail(message, {
+      actionLabel: "REVIEW & CONFIRM YOUR ORDER",
+      actionUrl: paymentLink
+    })
+  });
+  return true;
+}
+
+export async function sendCustomOrderRejectionEmail(request, emailService) {
+  if (!emailService.configured) return false;
+  const message = [
+    `Hi ${request.name},`,
+    "",
+    "Thank you for sharing your custom crochet idea with us.",
+    request.adminNote || "Unfortunately, we're unable to take on this custom order right now.",
+    "",
+    "We appreciate you thinking of our little studio.",
+    "",
+    "Made slowly, with love,",
+    "Meow.Cro Studio"
+  ].join("\n");
+  await emailService.send({
+    to: request.email,
+    subject: "An update on your Meow.Cro custom request",
+    text: message,
+    html: renderBrandedEmail(message)
   });
   return true;
 }

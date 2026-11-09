@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#f8f4ec">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="description" content="Review and confirm your Meow.Cro custom order offer.">
+  <title>Confirm your custom order — Meow.Cro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap"></noscript>
+  <link rel="stylesheet" href="styles.css?v=custom-workflow-20261109">
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script type="module" src="custom-order.js"></script>
+</head>
+<body>
+  <header class="site-header info-header account-header">
+    <a class="brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>MADE SLOWLY, MADE WITH LOVE</small></span></a>
+    <nav class="main-nav" aria-label="Main navigation"><a href="shop.html">Shop</a><a href="account.html">My account</a></nav>
+  </header>
+  <main class="checkout-page">
+    <header class="checkout-heading"><p class="eyebrow">A little idea, made personal</p><h1>Your custom <em>order.</em></h1><p>Review the studio's offer and add your delivery details to confirm it.</p></header>
+    <p class="account-message" id="custom-order-message" role="status" aria-live="polite">Loading your custom order offer…</p>
+    <section class="checkout-layout" id="custom-order-content" hidden>
+      <form class="checkout-form" id="custom-order-payment-form">
+        <div class="form-section-heading"><span>✿</span><div><h2>Delivery details</h2><p>Your order is confirmed once payment succeeds.</p></div></div>
+        <div class="field-grid">
+          <label class="field field-wide">Delivery address<textarea name="address" rows="3" autocomplete="street-address" maxlength="500" required></textarea></label>
+          <label class="field">City<input name="city" autocomplete="address-level2" maxlength="100" required></label>
+          <label class="field">PIN code<input name="pin" inputmode="numeric" autocomplete="postal-code" maxlength="20" required></label>
+          <label class="field field-wide">Delivery note <span class="optional">(optional)</span><input name="note" maxlength="500" placeholder="Anything the studio should know?"></label>
+        </div>
+        <button class="button button-primary" type="submit">Continue to secure payment <span>→</span></button>
+      </form>
+      <aside class="order-summary">
+        <div class="summary-heading"><h2>Your custom piece</h2></div>
+        <p><strong id="custom-order-name"></strong></p>
+        <p id="custom-order-idea"></p>
+        <p id="custom-order-details"></p>
+        <p id="custom-order-note"></p>
+        <div class="summary-totals"><div class="summary-total"><span>Quoted total</span><strong id="custom-order-price"></strong></div></div>
+        <p class="summary-love"><span>✿</span> Carefully made and sent with love.</p>
+      </aside>
+    </section>
+  </main>
+  <footer class="checkout-footer">Need a hand? <a href="contact.html">Contact the studio</a> · <a href="shipping-policy.html">Shipping</a> · <a href="privacy-policy.html">Privacy</a></footer>
+  <div class="toast-region" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

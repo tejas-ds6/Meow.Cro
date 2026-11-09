@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap"></noscript>
-  <link rel="stylesheet" href="styles.css?v=show-password-20261106"><script type="module" src="admin.js?v=tab-session-20261106"></script>
+  <link rel="stylesheet" href="styles.css?v=show-password-20261106"><script type="module" src="admin.js?v=custom-workflow-20261109"></script>
 </head>
 <body>
   <header class="site-header info-header account-header"><a class="brand" href="index.html"><span class="brand-flower">✿</span><span>MEOW.CRO<small>STUDIO ORDER DESK</small></span></a><button class="menu-toggle" aria-label="Open menu" aria-expanded="false">☰</button><nav class="main-nav" aria-label="Main navigation"><a href="index.html">Store</a><a class="active" href="admin.html">Orders</a></nav></header>
@@ -20,11 +20,13 @@
         <div><p class="eyebrow">Shared order database</p><h2 id="admin-view-title">Recent <em>orders.</em></h2></div>
         <div class="admin-actions">
           <button class="button button-outline" id="admin-refresh" type="button">Refresh orders</button>
+          <button class="button button-outline" id="admin-custom-toggle" type="button" aria-pressed="false">Custom requests</button>
           <button class="button button-outline" id="admin-view-toggle" type="button" aria-pressed="false">Customer reviews</button>
           <button class="button button-outline" id="admin-logout" type="button">Sign out</button>
         </div>
       </div>
       <div id="admin-orders-view"><div class="admin-orders" id="admin-orders"></div></div>
+      <div id="admin-custom-orders-view" hidden><div class="admin-orders" id="admin-custom-orders"></div></div>
       <div class="admin-review-section" id="admin-review-section" hidden>
         <div class="admin-review-header"><div><p class="eyebrow">Customer reviews</p><h3>Moderation <em>queue.</em></h3></div></div>
         <div class="admin-review-tabs" role="tablist" aria-label="Review moderation tabs">

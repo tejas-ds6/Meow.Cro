@@ -524,13 +524,12 @@ function initializeCustomRequest() {
     try {
       sessionStorage.setItem("crosia-custom-request", JSON.stringify(values));
     } catch (error) {
-      console.error("Unable to prepare your custom request.", error);
-      showToast("We couldn't prepare your request. Please try again or email meowcrosia@gmail.com.");
-      return;
+      console.warn("Unable to save custom request details in this browser; continuing with the request.", error);
     }
 
     submitButton.disabled = true;
     submitButton.textContent = "Sending your request…";
+    let savedRequest;
     try {
       const request = { ...values };
       if (photo instanceof File && photo.size > 0) {
@@ -541,7 +540,15 @@ function initializeCustomRequest() {
           reader.readAsDataURL(photo);
         });
       }
-      await postEmail("/api/custom-requests", request);
+      savedRequest = await postEmail("/api/custom-requests", request);
+      try {
+        sessionStorage.setItem("crosia-custom-request-result", JSON.stringify({
+          requestId: savedRequest.requestId,
+          notificationSent: savedRequest.notificationSent
+        }));
+      } catch (error) {
+        console.warn("Unable to save the custom request receipt in this browser.", error);
+      }
     } catch (error) {
       console.error("Unable to email your custom request.", error);
       showToast(error.message);
@@ -549,7 +556,7 @@ function initializeCustomRequest() {
       submitButton.innerHTML = originalButtonText;
       return;
     }
-    window.location.assign("request-confirmation.html");
+    window.location.assign(`request-confirmation.html?request=${encodeURIComponent(savedRequest.requestId)}`);
   });
 }
 
@@ -574,13 +581,33 @@ function initializeCustomRequestConfirmation() {
     return;
   }
   if (!values) {
+    const requestId = new URLSearchParams(window.location.search).get("request") || "";
+    if (/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(requestId)) {
+      card.querySelector(".eyebrow").textContent = "Request saved";
+      card.querySelector("h1").textContent = "Your idea is ready.";
+      card.querySelector(".confirmation-lede").textContent = `Your custom request (${requestId}) is saved with our studio.`;
+      card.querySelector(".custom-confirmation-details").hidden = true;
+      return;
+    }
     showUnavailableRequest("We couldn't find your request details. Please start again, or email us directly.");
     return;
   }
 
+  let result = null;
+  try {
+    result = JSON.parse(sessionStorage.getItem("crosia-custom-request-result") || "null");
+  } catch (error) {
+    console.warn("Unable to read the custom request receipt.", error);
+  }
   card.querySelector(".custom-confirmation-name").textContent = values.name;
   card.querySelector(".custom-confirmation-email").textContent = values.email;
   card.querySelector(".custom-confirmation-whatsapp").textContent = values.whatsapp;
+  card.querySelector(".confirmation-lede").textContent =
+    `Thanks, ${values.name}! Your request${result?.requestId ? ` (${result.requestId})` : ""} is saved with our studio.`;
+  if (result?.notificationSent === false) {
+    card.querySelector(".confirmation-note").textContent =
+      "We couldn't send the studio's email alert, but your request is safely saved and will be reviewed.";
+  }
 }
 
 function initializeSearch() {

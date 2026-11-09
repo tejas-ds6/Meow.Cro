@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node --check server.js && node --check server/account-service.js && node --check server/database.js && node --check server/email-service.js && node --check server/nimbuspost-service.js && node --check server/order-email.js && node --check server/payment-service.js && node --check server/validation.js && node --check public/app.js && node --check public/account.js && node --check public/admin.js && node --check public/tab-session.js && node --check public/catalog.js",
+    "build": "node --check server.js && node --check server/account-service.js && node --check server/custom-order-service.js && node --check server/database.js && node --check server/email-service.js && node --check server/nimbuspost-service.js && node --check server/order-email.js && node --check server/payment-service.js && node --check server/validation.js && node --check public/app.js && node --check public/account.js && node --check public/admin.js && node --check public/custom-order.js && node --check public/tab-session.js && node --check public/catalog.js",
     "start": "node server.js",
     "test": "node --test"
   },

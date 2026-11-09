@@ -56,6 +56,33 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS custom_order_requests (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  whatsapp TEXT NOT NULL,
+  idea TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  budget NUMERIC(12, 2),
+  needed_by DATE,
+  reference_photo BYTEA,
+  reference_photo_type TEXT,
+  reference_photo_name TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'offered', 'rejected', 'paid')),
+  quoted_amount NUMERIC(12, 2),
+  admin_note TEXT NOT NULL DEFAULT '',
+  quote_token_hash TEXT,
+  quote_expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS custom_order_requests_status_created_idx
+  ON custom_order_requests (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS custom_order_requests_email_idx
+  ON custom_order_requests (LOWER(BTRIM(email)), created_at DESC);
+
 CREATE TABLE IF NOT EXISTS customer_addresses (
   id UUID PRIMARY KEY,
   customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -104,6 +131,7 @@ CREATE TABLE IF NOT EXISTS orders (
   cancellation_requested BOOLEAN NOT NULL DEFAULT FALSE,
   cancellation_request_status TEXT,
   checkout_key TEXT,
+  custom_order_id UUID UNIQUE REFERENCES custom_order_requests(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -112,6 +140,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS nimbuspost_order_id TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS nimbuspost_awb TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS nimbuspost_label_url TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_key TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS custom_order_id UUID UNIQUE REFERENCES custom_order_requests(id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS orders_customer_created_idx ON orders (customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS orders_email_created_idx ON orders (customer_email, created_at DESC);

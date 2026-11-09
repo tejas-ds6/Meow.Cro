@@ -16,7 +16,7 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[character]);
 const price = (amount) => new Intl.NumberFormat("en-IN", {
-  style: "currency", currency: "INR", maximumFractionDigits: 0
+  style: "currency", currency: "INR", maximumFractionDigits: 2
 }).format(amount);
 
 function showMessage(message, isError = false) {
@@ -132,6 +132,7 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
     ${delivery}
     <div class="order-detail-items">${order.items.map((item) => {
       const productId = String(item.id ?? item.productId ?? "");
+      const isCustomItem = productId.startsWith("custom-");
       const review = reviewsByProduct.get(productId);
       const reviewStatus = review?.status;
       const reviewMessage = reviewStatus === "approved"
@@ -143,7 +144,7 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
             : reviewStatus === "hidden"
               ? "Your review is hidden"
             : "";
-      const reviewAction = accountData?.customer?.email && order.status === "Delivered" && order.paymentStatus === "Paid"
+      const reviewAction = !isCustomItem && accountData?.customer?.email && order.status === "Delivered" && order.paymentStatus === "Paid"
         ? review
           ? `<p class="order-review-status">${reviewMessage}</p>
              <button class="account-text-button" type="button" data-view-review="${escapeHtml(productId)}">View your review</button>
@@ -162,7 +163,7 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
                <button class="button button-primary" type="submit">Submit review <span>→</span></button>
              </form>`
         : "";
-      return `<div class="detail-item-row"><div class="detail-item">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Quantity ${item.qty} · ${price(item.unitPrice)} each</small></div><strong>${price(item.qty * item.unitPrice)}</strong></div>${reviewAction}</div>`;
+      return `<div class="detail-item-row"><div class="detail-item">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Quantity ${item.qty} · ${price(item.unitPrice)} each</small>${item.customDescription ? `<small class="order-custom-description">${escapeHtml(item.customDescription)}</small>` : ""}</div><strong>${price(item.qty * item.unitPrice)}</strong></div>${reviewAction}</div>`;
     }).join("")}</div>
     <div class="order-detail-totals"><p>Subtotal <strong>${price(order.subtotal)}</strong></p><p>Shipping <strong>${price(order.shipping)}</strong></p>${order.discount ? `<p>Discount <strong>−${price(order.discount)}</strong></p>` : ""}<p class="grand-total">Total <strong>${price(order.total)}</strong></p></div>
     <div class="order-detail-address"><h4>Delivery address</h4><p>${escapeHtml(order.name)} · ${escapeHtml(order.phone)}<br>${escapeHtml(order.address)}, ${escapeHtml(order.city)} ${escapeHtml(order.pin)}</p><p>${escapeHtml(order.paymentMethod)} · ${escapeHtml(order.paymentStatus)}</p></div>

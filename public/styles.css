@@ -470,6 +470,7 @@ body.has-floating-checkout .toast-region{right:28px;bottom:88px;max-width:calc(1
 .detail-item img{width:48px;height:52px;object-fit:contain;background:#eee7dc}
 .detail-item>div{display:grid;gap:5px}
 .detail-item small{color:var(--muted);font-size:9px}
+.detail-item .order-custom-description{white-space:pre-line}
 .detail-item-row{display:grid;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}
 .detail-item-row .detail-item{padding:0;border:0}
 .order-review-status{margin:0;color:#557351;font-size:9px;font-weight:600}

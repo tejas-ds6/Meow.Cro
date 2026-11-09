@@ -10,6 +10,9 @@ const loginPanel = document.querySelector("#admin-login");
 const dashboard = document.querySelector("#admin-dashboard");
 const orderList = document.querySelector("#admin-orders");
 const ordersView = document.querySelector("#admin-orders-view");
+const customOrdersView = document.querySelector("#admin-custom-orders-view");
+const customOrderList = document.querySelector("#admin-custom-orders");
+const customViewToggle = document.querySelector("#admin-custom-toggle");
 const reviewsSection = document.querySelector("#admin-review-section");
 const dashboardTitle = document.querySelector("#admin-view-title");
 const viewToggle = document.querySelector("#admin-view-toggle");
@@ -23,11 +26,12 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[character]);
 const price = (amount) => new Intl.NumberFormat("en-IN", {
-  style: "currency", currency: "INR", maximumFractionDigits: 0
+  style: "currency", currency: "INR", maximumFractionDigits: 2
 }).format(amount);
 
 let dashboardView = "orders";
 const reviewPhotoObjectUrls = new Set();
+const customPhotoObjectUrls = new Set();
 
 function handleExpiredSession() {
   clearSessionExpiry();
@@ -45,11 +49,16 @@ function showMessage(value, isError = false) {
 function setDashboardView(view) {
   dashboardView = view;
   const showingReviews = view === "reviews";
-  ordersView.hidden = showingReviews;
+  const showingCustomOrders = view === "custom";
+  ordersView.hidden = showingReviews || showingCustomOrders;
+  customOrdersView.hidden = !showingCustomOrders;
   reviewsSection.hidden = !showingReviews;
-  dashboardTitle.innerHTML = showingReviews ? "Customer <em>reviews.</em>" : "Recent <em>orders.</em>";
+  dashboardTitle.innerHTML = showingReviews ? "Customer <em>reviews.</em>"
+    : showingCustomOrders ? "Custom <em>requests.</em>" : "Recent <em>orders.</em>";
   viewToggle.textContent = showingReviews ? "Recent orders" : "Customer reviews";
   viewToggle.setAttribute("aria-pressed", String(showingReviews));
+  customViewToggle.textContent = showingCustomOrders ? "Recent orders" : "Custom requests";
+  customViewToggle.setAttribute("aria-pressed", String(showingCustomOrders));
 }
 
 async function request(path, options = {}) {
@@ -136,6 +145,32 @@ function displayOrders(orders) {
   </article>`).join("");
 }
 
+function displayCustomOrders(requests) {
+  for (const url of customPhotoObjectUrls) URL.revokeObjectURL(url);
+  customPhotoObjectUrls.clear();
+  if (!requests.length) {
+    customOrderList.innerHTML = '<div class="account-card account-empty"><p>There are no custom requests yet.</p></div>';
+    return;
+  }
+  customOrderList.innerHTML = requests.map((request) => `<article class="account-card admin-order admin-custom-order">
+    <header class="admin-order-heading"><div><p class="eyebrow">${escapeHtml(new Date(request.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }))}</p><h3>Custom request</h3></div><span class="status-pill">${escapeHtml(request.status)}</span></header>
+    <div class="admin-customer"><strong>${escapeHtml(request.name)}</strong><span>${escapeHtml(request.email)} · ${escapeHtml(request.whatsapp)}</span></div>
+    <p><strong>Idea:</strong> ${escapeHtml(request.idea)}</p>
+    ${request.details ? `<p><strong>Details:</strong> ${escapeHtml(request.details)}</p>` : ""}
+    <p><strong>Budget:</strong> ${request.budget ? price(request.budget) : "Not specified"} · <strong>Needed by:</strong> ${escapeHtml(request.neededBy ? new Date(`${request.neededBy}T00:00:00`).toLocaleDateString("en-IN") : "Not specified")}</p>
+    ${request.hasReferencePhoto ? `<button class="text-link" type="button" data-custom-photo="${escapeHtml(request.id)}">View reference photo</button>` : ""}
+    ${request.status === "offered" ? `<p><strong>Current quote:</strong> ${price(request.quotedAmount)} · expires ${escapeHtml(new Date(request.quoteExpiresAt).toLocaleDateString("en-IN"))}</p>` : ""}
+    ${request.adminNote ? `<p><strong>Studio note:</strong> ${escapeHtml(request.adminNote)}</p>` : ""}
+    ${request.status === "rejected" ? `<button class="button button-outline" type="button" data-custom-reject="${escapeHtml(request.id)}" data-custom-note="${escapeHtml(request.adminNote)}">Resend decline email</button>` : ""}
+    ${request.status === "pending" || request.status === "offered" ? `<form class="admin-order-form admin-custom-offer" data-custom-order="${escapeHtml(request.id)}">
+      <label class="field">Final price (₹)<input name="amount" type="number" min="0.01" max="500000" step="0.01" value="${escapeHtml(request.quotedAmount ?? "")}" required></label>
+      <label class="field field-wide">Note for the customer <textarea name="adminNote" rows="2" maxlength="500">${escapeHtml(request.adminNote)}</textarea></label>
+      <button class="button button-primary" type="submit">${request.status === "offered" ? "Update & resend offer" : "Accept & send priced offer"} <span>→</span></button>
+      ${request.status === "pending" ? `<button class="button button-outline" type="button" data-custom-reject="${escapeHtml(request.id)}">Decline request</button>` : ""}
+    </form>` : ""}
+  </article>`).join("");
+}
+
 function displayReviews(reviews) {
   for (const url of reviewPhotoObjectUrls) URL.revokeObjectURL(url);
   reviewPhotoObjectUrls.clear();
@@ -195,11 +230,13 @@ async function loadReviews(status = "pending") {
 }
 
 async function loadOrders() {
-  const [ordersResult, activeTab] = await Promise.all([
+  const [ordersResult, customOrdersResult, activeTab] = await Promise.all([
     request("/api/admin/orders"),
+    request("/api/admin/custom-orders"),
     Promise.resolve(document.querySelector(".review-tab.is-active")?.dataset.reviewTab || "pending")
   ]);
   displayOrders(ordersResult.orders);
+  displayCustomOrders(customOrdersResult.requests);
   await loadReviews(activeTab);
   loginPanel.hidden = true;
   dashboard.hidden = false;
@@ -222,6 +259,76 @@ document.querySelector("#admin-login-form").addEventListener("submit", async (ev
     showMessage(error.message, true);
   } finally {
     button.disabled = false;
+  }
+});
+
+customOrderList.addEventListener("submit", async (event) => {
+  const form = event.target.closest(".admin-custom-offer");
+  if (!form) return;
+  event.preventDefault();
+  const button = form.querySelector('[type="submit"]');
+  button.disabled = true;
+  try {
+    const values = Object.fromEntries(new FormData(form));
+    const result = await request(`/api/admin/custom-orders/${encodeURIComponent(form.dataset.customOrder)}/offer`, {
+      method: "POST",
+      body: JSON.stringify(values)
+    });
+    await loadOrders();
+    showMessage(result.notificationSent
+      ? "Priced offer emailed to the customer."
+      : "Offer saved, but its email wasn't sent. Check email configuration and resend the offer.");
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+customOrderList.addEventListener("click", async (event) => {
+  const reject = event.target.closest("[data-custom-reject]");
+  if (reject) {
+    const isResend = reject.closest(".admin-custom-order").querySelector(".status-pill").textContent === "rejected";
+    if (!window.confirm(isResend ? "Resend the decline email to this customer?" : "Decline this custom request and email the customer?")) return;
+    reject.disabled = true;
+    try {
+      const result = await request(`/api/admin/custom-orders/${encodeURIComponent(reject.dataset.customReject)}/reject`, {
+        method: "POST",
+        body: JSON.stringify({
+          adminNote: reject.closest(".admin-custom-order").querySelector('[name="adminNote"]')?.value ??
+            reject.dataset.customNote ?? ""
+        })
+      });
+      await loadOrders();
+      showMessage(result.notificationSent
+        ? isResend ? "Decline email sent again." : "Request declined and customer emailed."
+        : isResend ? "The decline email still couldn't be sent." : "Request declined, but the customer email wasn't sent.");
+    } catch (error) {
+      showMessage(error.message, true);
+    }
+    return;
+  }
+
+  const photoButton = event.target.closest("[data-custom-photo]");
+  if (!photoButton) return;
+  photoButton.disabled = true;
+  try {
+    const response = await fetch(`/api/admin/custom-orders/${encodeURIComponent(photoButton.dataset.customPhoto)}/photo`, {
+      headers: tabSessionHeaders({ Accept: "image/jpeg, image/png, image/webp" }),
+      credentials: "same-origin"
+    });
+    if (!response.ok) throw new Error("We couldn't load this reference photo.");
+    const url = URL.createObjectURL(await response.blob());
+    customPhotoObjectUrls.add(url);
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Open reference photo";
+    photoButton.replaceWith(link);
+  } catch (error) {
+    showMessage(error.message, true);
+    photoButton.disabled = false;
   }
 });
 
@@ -296,6 +403,10 @@ viewToggle.addEventListener("click", async () => {
   } finally {
     viewToggle.disabled = false;
   }
+});
+
+customViewToggle.addEventListener("click", () => {
+  setDashboardView(dashboardView === "custom" ? "orders" : "custom");
 });
 
 reviewTabs.forEach((button) => {

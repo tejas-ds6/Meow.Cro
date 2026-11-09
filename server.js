@@ -6,9 +6,15 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAccountService } from "./server/account-service.js";
+import { createCustomOrderService } from "./server/custom-order-service.js";
 import { databaseConfigured, initializeDatabase, isDatabaseReady, logDatabaseError, pool } from "./server/database.js";
 import { createEmailService, emailConfigurationMessage } from "./server/email-service.js";
-import { sendOrderStatusEmail, sendPaidOrderEmails } from "./server/order-email.js";
+import {
+  sendCustomOrderOfferEmail,
+  sendCustomOrderRejectionEmail,
+  sendOrderStatusEmail,
+  sendPaidOrderEmails
+} from "./server/order-email.js";
 import { createNimbusPostService, NimbusPostError } from "./server/nimbuspost-service.js";
 import { products } from "./public/catalog.js";
 import { createOrderNumber, createRazorpayService, PaymentVerificationError } from "./server/payment-service.js";
@@ -35,6 +41,7 @@ const emailService = createEmailService(process.env);
 const paymentService = createRazorpayService(process.env);
 const nimbusPostService = createNimbusPostService(process.env);
 const accountService = pool ? createAccountService({ database: pool, emailService, environment: process.env }) : null;
+const customOrderService = pool ? createCustomOrderService({ database: pool }) : null;
 const productsById = new Map(products.map((product) => [product.id, product]));
 const tabSessionHeader = "x-tab-session";
 const accountDatabaseUnavailable = "Customer accounts and saved order tracking require PostgreSQL. Configure DATABASE_URL and restart the server.";
@@ -109,7 +116,7 @@ function requireDatabase(_req, res, next) {
 const loadAccountSession = asyncRoute(async (req, res, next) => {
   const role = req.path.startsWith("/admin/") ? "admin"
     : req.path.startsWith("/account/") || req.path.startsWith("/customer/") ||
-      req.path.startsWith("/payments/razorpay/") ? "customer"
+      req.path.startsWith("/payments/razorpay/") || req.path.startsWith("/custom-orders/") ? "customer"
       : null;
   const tabId = role ? getTabSessionId(req) : "";
   const cookieName = role && tabId ? getSessionCookieName(role, tabId) : "";
@@ -192,6 +199,7 @@ app.use([
   "/api/payments/razorpay/orders",
   "/api/payments/razorpay/verify",
   "/api/payments/razorpay/confirm",
+  "/api/custom-orders/payment",
   "/api/newsletter",
   "/api/custom-requests",
   "/api/contact"
@@ -765,6 +773,82 @@ async function removeReviewPhotoFiles(references) {
     res.json({ orders: await accountService.listAdminOrders() });
   }));
 
+  app.get("/api/admin/custom-orders", requireDatabase, requireAdmin, asyncRoute(async (_req, res) => {
+    res.json({ requests: await customOrderService.listAdminRequests() });
+  }));
+
+  app.get("/api/admin/custom-orders/:id/photo", requireDatabase, requireAdmin, requireUuidParameter, asyncRoute(async (req, res) => {
+    const photo = await customOrderService.getReferencePhoto(req.params.id);
+    if (!photo) {
+      res.status(404).json({ error: "No reference photo was found for this request." });
+      return;
+    }
+    res.setHeader("Content-Type", photo.reference_photo_type);
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(photo.reference_photo);
+  }));
+
+  app.post("/api/admin/custom-orders/:id/offer", requireDatabase, requireAdmin, requireUuidParameter, asyncRoute(async (req, res) => {
+    const values = validateFields(() => {
+      const rawAmount = String(req.body?.amount ?? "").trim();
+      const amount = Number(rawAmount);
+      if (!/^\d+(?:\.\d{1,2})?$/.test(rawAmount) || !Number.isFinite(amount) || amount <= 0 || amount > 500000) {
+        throw new Error("Enter a price greater than ₹0 and no more than ₹5,00,000, with up to two decimal places.");
+      }
+      return {
+        amount,
+        adminNote: text(req.body?.adminNote, "Studio note", { required: false, max: 500 })
+      };
+    }, res);
+    if (!values) return;
+    const result = await customOrderService.offer(req.params.id, values.amount, values.adminNote);
+    if (!result) {
+      res.status(409).json({ error: "This request can no longer be quoted. Refresh the request list." });
+      return;
+    }
+    let notificationSent = false;
+    if (emailService.configured) {
+      try {
+        notificationSent = await sendCustomOrderOfferEmail(
+          result.request,
+          emailService,
+          `${getPublicSiteOrigin()}/custom-order.html?token=${encodeURIComponent(result.token)}`
+        );
+      } catch (error) {
+        console.error("Custom order offer was saved, but its customer email could not be sent:", error);
+      }
+    } else {
+      console.warn("Custom order offer was saved, but email is not configured.");
+    }
+    res.json({ request: result.request, notificationSent });
+  }));
+
+  app.post("/api/admin/custom-orders/:id/reject", requireDatabase, requireAdmin, requireUuidParameter, asyncRoute(async (req, res) => {
+    const adminNote = validateFields(
+      () => text(req.body?.adminNote, "Studio note", { required: false, max: 500 }),
+      res
+    );
+    if (adminNote === null) return;
+    const request = await customOrderService.reject(req.params.id, adminNote);
+    if (!request) {
+      res.status(409).json({ error: "This request has already been answered. Refresh the request list." });
+      return;
+    }
+    let notificationSent = false;
+    if (emailService.configured) {
+      try {
+        notificationSent = await sendCustomOrderRejectionEmail(request, emailService);
+      } catch (error) {
+        console.error("Custom order request was declined, but its customer email could not be sent:", error);
+      }
+    } else {
+      console.warn("Custom order request was declined, but email is not configured.");
+    }
+    res.json({ request, notificationSent });
+  }));
+
   app.post("/api/admin/orders/:id/nimbuspost", requireDatabase, requireAdmin, requireUuidParameter, asyncRoute(async (req, res) => {
     if (!nimbusPostService.configured) {
       res.status(503).json({ error: "NimbusPost is not configured. Set NIMBUSPOST_API_KEY, NIMBUSPOST_API_SECRET, and NIMBUSPOST_WAREHOUSE_ID on the server." });
@@ -951,7 +1035,11 @@ app.post("/api/custom-requests", express.json({ limit: "7mb" }), async (req, res
     const body = req.body || {};
     const email = emailAddress(body.email);
     const neededBy = text(body["needed-by"], "Needed-by date", { required: false, max: 10 });
-    if (neededBy && !/^\d{4}-\d{2}-\d{2}$/.test(neededBy)) {
+    const parsedNeededBy = /^\d{4}-\d{2}-\d{2}$/.test(neededBy)
+      ? new Date(`${neededBy}T00:00:00.000Z`)
+      : null;
+    if (neededBy && (!parsedNeededBy || Number.isNaN(parsedNeededBy.getTime()) ||
+      parsedNeededBy.toISOString().slice(0, 10) !== neededBy)) {
       throw new Error("Enter a valid needed-by date.");
     }
     const budget = text(body.budget, "Budget", { required: false, max: 8 });
@@ -970,25 +1058,97 @@ app.post("/api/custom-requests", express.json({ limit: "7mb" }), async (req, res
   }, res);
   if (!values) return;
 
-  await sendStudioEmail({
-    replyTo: values.email,
-    subject: "New custom crochet request",
-    text: [
-      `Name: ${values.name}`,
-      `Email: ${values.email}`,
-      `WhatsApp: ${values.whatsapp}`,
-      "",
-      "What they would like made:",
-      values.idea,
-      "",
-      `Colors, size, or other details: ${values.details || "Not specified"}`,
-      `Budget: ${values.budget ? `₹${values.budget}` : "Not specified"}`,
-      `Needed by: ${values.neededBy || "Not specified"}`,
-      `Reference photo: ${values.photo ? "Attached" : "Not attached"}`
-    ].join("\n"),
-    attachments: values.photo ? [values.photo] : []
-  }, res);
+  if (!databaseConfigured || !isDatabaseReady() || !customOrderService) {
+    res.status(503).json({ error: accountDatabaseUnavailable });
+    return;
+  }
+  const savedRequest = await customOrderService.createRequest(values);
+  let notificationSent = false;
+  if (emailService.configured) {
+    try {
+      await emailService.send({
+        to: process.env.MAIL_TO,
+        replyTo: values.email,
+        subject: "New custom crochet request",
+        text: [
+          `Request: ${savedRequest.id}`,
+          `Name: ${values.name}`,
+          `Email: ${values.email}`,
+          `WhatsApp: ${values.whatsapp}`,
+          "",
+          "What they would like made:",
+          values.idea,
+          "",
+          `Colors, size, or other details: ${values.details || "Not specified"}`,
+          `Budget: ${values.budget ? `₹${values.budget}` : "Not specified"}`,
+          `Needed by: ${values.neededBy || "Not specified"}`,
+          `Reference photo: ${values.photo ? "Attached" : "Not attached"}`,
+          "",
+          "Review and respond in the admin order desk."
+        ].join("\n"),
+        attachments: values.photo ? [values.photo] : []
+      });
+      notificationSent = true;
+    } catch (error) {
+      console.error("Custom order request was saved, but its studio notification could not be sent:", error);
+    }
+  } else {
+    console.warn("Custom order request was saved, but email is not configured.");
+  }
+  res.status(201).json({ ok: true, requestId: savedRequest.id, notificationSent });
 });
+
+app.get("/api/custom-orders/offer", asyncRoute(async (req, res) => {
+  const token = validateFields(() => text(req.query.token, "Offer link", { max: 100 }), res);
+  if (!token) return;
+  if (!databaseConfigured || !isDatabaseReady() || !customOrderService) {
+    res.status(503).json({ error: accountDatabaseUnavailable });
+    return;
+  }
+  const offer = await customOrderService.getOffer(token);
+  if (!offer) {
+    res.status(404).json({ error: "This offer link is invalid or has expired. Please contact the studio for help." });
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ offer });
+}));
+
+app.post("/api/custom-orders/payment", express.json({ limit: "32kb" }), asyncRoute(async (req, res) => {
+  const values = validateFields(() => ({
+    token: text(req.body?.token, "Offer link", { max: 100 }),
+    address: text(req.body?.address, "Delivery address", { max: 500 }),
+    city: text(req.body?.city, "City", { max: 100 }),
+    pin: text(req.body?.pin, "PIN code", { max: 20 }),
+    note: text(req.body?.note, "Delivery note", { required: false, max: 500 })
+  }), res);
+  if (!values) return;
+  if (!databaseConfigured || !isDatabaseReady() || !accountService) {
+    res.status(503).json({ error: accountDatabaseUnavailable });
+    return;
+  }
+  if (!paymentService.configured) {
+    res.status(503).json({ error: "Online payment is not available right now. Please contact the studio." });
+    return;
+  }
+  try {
+    const result = await accountService.startCustomOrderPayment(
+      values.token,
+      values,
+      req.accountSession?.role === "customer" ? req.accountSession.customer_id : null,
+      (order) => paymentService.createOrder(order)
+    );
+    if (!result) {
+      res.status(409).json({ error: "This offer has expired, is no longer available, or has already been paid." });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result.paymentOrder);
+  } catch (error) {
+    console.error("Custom order payment creation failed:", error);
+    res.status(502).json({ error: "We couldn't start your payment. Please try again shortly." });
+  }
+}));
 
 app.post("/api/contact", express.json({ limit: "32kb" }), async (req, res) => {
   const values = validateFields(() => {
@@ -1039,11 +1199,25 @@ app.post("/api/payments/razorpay/verify", express.json({ limit: "32kb" }), async
       signature: details.razorpay_signature,
       verificationToken: details.verificationToken
     });
+    if (order.customOrderId && !await accountService.isCustomPaymentOrderCurrent(
+      order.number,
+      details.razorpay_order_id,
+      details.razorpay_payment_id
+    )) {
+      throw new PaymentVerificationError("This custom order payment link is no longer current. Please reopen your latest offer email.");
+    }
     const savedOrder = databaseConfigured
-      ? await accountService.updatePayment(order.number, "Paid", order.paymentId)
+      ? await accountService.updatePayment(order.number, "Paid", order.paymentId, details.razorpay_order_id)
       : null;
     if (databaseConfigured && !savedOrder) {
       throw new Error("The verified Razorpay order was not found in PostgreSQL.");
+    }
+    if (order.customOrderId && savedOrder?.paymentStatus !== "Paid" && !await accountService.isCustomPaymentOrderCurrent(
+      order.number,
+      details.razorpay_order_id,
+      details.razorpay_payment_id
+    )) {
+      throw new PaymentVerificationError("This custom order offer changed before payment could be confirmed. Please open the latest offer email.");
     }
     const confirmedOrder = savedOrder
       ? { ...order, ...savedOrder, payment: "UPI (paid)", paymentId: order.paymentId }
@@ -1072,11 +1246,25 @@ app.post("/api/payments/razorpay/confirm", express.json({ limit: "32kb" }), asyn
       signature: details.razorpay_signature,
       verificationToken: details.verificationToken
     });
+    if (order.customOrderId && !await accountService.isCustomPaymentOrderCurrent(
+      order.number,
+      details.razorpay_order_id,
+      details.razorpay_payment_id
+    )) {
+      throw new PaymentVerificationError("This custom order payment link is no longer current. Please reopen your latest offer email.");
+    }
     const savedOrder = databaseConfigured
-      ? await accountService.updatePayment(order.number, "Paid", order.paymentId)
+      ? await accountService.updatePayment(order.number, "Paid", order.paymentId, details.razorpay_order_id)
       : null;
     if (databaseConfigured && !savedOrder) {
       throw new Error("The verified Razorpay order was not found in PostgreSQL.");
+    }
+    if (order.customOrderId && savedOrder?.paymentStatus !== "Paid" && !await accountService.isCustomPaymentOrderCurrent(
+      order.number,
+      details.razorpay_order_id,
+      details.razorpay_payment_id
+    )) {
+      throw new PaymentVerificationError("This custom order offer changed before payment could be confirmed. Please open the latest offer email.");
     }
     res.json({
       ok: true,
@@ -1140,7 +1328,7 @@ app.get([...seoPageFiles.keys()], asyncRoute(async (req, res) => {
   res.type("html").send(html.replaceAll("{{SITE_ORIGIN}}", siteOrigin));
 }));
 
-app.use(["/account.html", "/admin.html"], (_req, res, next) => {
+app.use(["/account.html", "/admin.html", "/custom-order.html"], (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
 });

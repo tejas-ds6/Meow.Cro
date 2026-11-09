@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, scrypt as callbackScrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import { createOrderNumber } from "./payment-service.js";
 
 const scrypt = promisify(callbackScrypt);
 const resetLifetimeMs = 60 * 60 * 1000;
@@ -55,6 +56,7 @@ function safeOrder(row) {
     paymentMethod: row.payment_method,
     paymentStatus: row.payment_status,
     paymentReference: row.payment_reference,
+    customOrderId: row.custom_order_id || null,
     status: row.order_status,
     deliveryMethod: row.delivery_method,
     courierName: row.courier_name,
@@ -516,13 +518,122 @@ export function createAccountService({ database, emailService, environment }) {
     }
   }
 
-  async function updatePayment(number, paymentStatus, paymentReference) {
+  async function startCustomOrderPayment(token, checkout, customerId, createPaymentOrder) {
+    const client = await database.connect();
+    try {
+      await client.query("BEGIN");
+      const requestResult = await client.query(
+        `SELECT * FROM custom_order_requests
+         WHERE quote_token_hash = $1 AND status = 'offered' AND quote_expires_at > NOW()
+         FOR UPDATE`,
+        [hashToken(token)]
+      );
+      const request = requestResult.rows[0];
+      if (!request) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      const existingOrderResult = await client.query(
+        "SELECT * FROM orders WHERE custom_order_id = $1 FOR UPDATE",
+        [request.id]
+      );
+      const existingOrder = existingOrderResult.rows[0];
+      const total = Number(request.quoted_amount);
+      const order = {
+        number: existingOrder?.number || createOrderNumber(),
+        customerId,
+        customOrderId: request.id,
+        email: request.email,
+        name: request.name,
+        phone: request.whatsapp,
+        address: checkout.address,
+        city: checkout.city,
+        pin: checkout.pin,
+        note: [request.idea, request.details && `Details: ${request.details}`, checkout.note]
+          .filter(Boolean).join("\n"),
+        items: [{
+          productId: `custom-${request.id}`,
+          name: "Custom crochet order",
+          qty: 1,
+          unitPrice: total,
+          variant: request.idea.slice(0, 160),
+          customDescription: [request.idea, request.details && `Details: ${request.details}`]
+            .filter(Boolean).join("\n")
+        }],
+        subtotal: total,
+        shipping: 0,
+        discount: 0,
+        total,
+        payment: "UPI"
+      };
+      const paymentOrder = await createPaymentOrder(order);
+      const saved = await client.query(
+        `INSERT INTO orders (
+          id, number, customer_id, customer_email, name, phone, address, city, pin, note, items,
+          subtotal, shipping, discount, total, payment_method, payment_status, razorpay_order_id, custom_order_id
+        ) VALUES ($1, $2, $3, LOWER(BTRIM($4)), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'Pending', $17, $18)
+        ON CONFLICT (custom_order_id) DO UPDATE SET
+          customer_id = EXCLUDED.customer_id, name = EXCLUDED.name, phone = EXCLUDED.phone,
+          address = EXCLUDED.address, city = EXCLUDED.city, pin = EXCLUDED.pin, note = EXCLUDED.note,
+          items = EXCLUDED.items, subtotal = EXCLUDED.subtotal, shipping = EXCLUDED.shipping,
+          discount = EXCLUDED.discount, total = EXCLUDED.total, payment_method = EXCLUDED.payment_method,
+          payment_status = 'Pending', razorpay_order_id = EXCLUDED.razorpay_order_id,
+          updated_at = NOW()
+        WHERE orders.payment_status <> 'Paid'
+        RETURNING *`,
+        [
+          randomUUID(), order.number, customerId, order.email, order.name, order.phone, order.address,
+          order.city, order.pin, order.note, JSON.stringify(order.items), order.subtotal, order.shipping,
+          order.discount, order.total, order.payment, paymentOrder.orderId, request.id
+        ]
+      );
+      if (!saved.rows[0]) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      if (!existingOrder) {
+        await client.query(
+          "INSERT INTO order_status_events (id, order_id, status, note) VALUES ($1, $2, $3, $4)",
+          [randomUUID(), saved.rows[0].id, "Order Placed", "Custom order awaiting payment."]
+        );
+      }
+      await client.query("COMMIT");
+      return { paymentOrder, order: safeOrder(saved.rows[0]) };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function isCustomPaymentOrderCurrent(number, razorpayOrderId, paymentId) {
+    const result = await database.query(
+      `SELECT 1 FROM orders
+       WHERE number = $1 AND custom_order_id IS NOT NULL AND razorpay_order_id = $2
+         AND (payment_status <> 'Paid' OR payment_reference = $3)`,
+      [number, razorpayOrderId, paymentId]
+    );
+    return result.rows.length > 0;
+  }
+
+  async function updatePayment(number, paymentStatus, paymentReference, razorpayOrderId = null) {
     const result = await database.query(
       `UPDATE orders SET payment_status = $1, payment_reference = $2,
        order_status = CASE WHEN $1 = 'Paid' AND order_status = 'Order Placed' THEN 'Order Confirmed' ELSE order_status END,
-       updated_at = NOW() WHERE number = $3 AND payment_status NOT IN ('Paid', 'Refund required (manual)') RETURNING *`,
-      [paymentStatus, paymentReference, number]
+       updated_at = NOW() WHERE number = $3
+         AND (custom_order_id IS NULL OR $4::text IS NULL OR razorpay_order_id = $4)
+         AND payment_status NOT IN ('Paid', 'Refund required (manual)') RETURNING *`,
+      [paymentStatus, paymentReference, number, razorpayOrderId]
     );
+    if (result.rows[0]?.custom_order_id && paymentStatus === "Paid") {
+      await database.query(
+        `UPDATE custom_order_requests SET status = 'paid', quote_token_hash = NULL,
+         quote_expires_at = NULL, updated_at = NOW() WHERE id = $1`,
+        [result.rows[0].custom_order_id]
+      );
+    }
     if (result.rows[0] && paymentStatus === "Paid") {
       const eventStatus = result.rows[0].order_status === "Order Confirmed" ? "Order Confirmed" : "Payment Captured";
       await database.query(
@@ -538,8 +649,9 @@ export function createAccountService({ database, emailService, environment }) {
   async function listCustomerOrders(customerId, email = null) {
     const result = await database.query(
       `SELECT * FROM orders
-       WHERE customer_id = $1
-          OR ($2::text IS NOT NULL AND LOWER(BTRIM(customer_email)) = $2)
+       WHERE (customer_id = $1
+          OR ($2::text IS NOT NULL AND LOWER(BTRIM(customer_email)) = $2))
+         AND (custom_order_id IS NULL OR payment_status = 'Paid')
        ORDER BY created_at DESC`,
       [customerId, normalizeEmail(email) || null]
     );
@@ -549,7 +661,8 @@ export function createAccountService({ database, emailService, environment }) {
   async function listCustomerOrdersByEmail(email) {
     const normalizedEmail = normalizeEmail(email);
     const result = await database.query(
-      "SELECT * FROM orders WHERE LOWER(BTRIM(customer_email)) = $1 ORDER BY created_at DESC",
+      `SELECT * FROM orders WHERE LOWER(BTRIM(customer_email)) = $1
+       AND (custom_order_id IS NULL OR payment_status = 'Paid') ORDER BY created_at DESC`,
       [normalizedEmail]
     );
     return result.rows.map(safeOrder);
@@ -570,6 +683,7 @@ export function createAccountService({ database, emailService, environment }) {
        WHERE o.id = $1
          AND (o.customer_id = $2
            OR ($3::text IS NOT NULL AND LOWER(BTRIM(o.customer_email)) = $3))
+         AND (o.custom_order_id IS NULL OR o.payment_status = 'Paid')
        GROUP BY o.id`,
       [id, customerId, normalizeEmail(email) || null]
     );
@@ -583,7 +697,8 @@ export function createAccountService({ database, emailService, environment }) {
         'status', e.status, 'note', e.note, 'createdAt', e.created_at
       ) ORDER BY e.created_at) FILTER (WHERE e.id IS NOT NULL), '[]'::json) AS events
        FROM orders o LEFT JOIN order_status_events e ON e.order_id = o.id
-       WHERE o.id = $1 AND LOWER(BTRIM(o.customer_email)) = $2 GROUP BY o.id`,
+       WHERE o.id = $1 AND LOWER(BTRIM(o.customer_email)) = $2
+         AND (o.custom_order_id IS NULL OR o.payment_status = 'Paid') GROUP BY o.id`,
       [id, normalizedEmail]
     );
     return result.rows[0] ? safeOrder(result.rows[0]) : null;
@@ -1242,6 +1357,8 @@ export function createAccountService({ database, emailService, environment }) {
     saveAddress,
     deleteAddress,
     saveOrder,
+    startCustomOrderPayment,
+    isCustomPaymentOrderCurrent,
     updatePayment,
     listCustomerOrders,
     listCustomerOrdersByEmail,
