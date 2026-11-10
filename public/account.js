@@ -138,13 +138,14 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
       const reviewMessage = reviewStatus === "approved"
         ? "Review approved"
         : reviewStatus === "pending"
-          ? "Review submitted – Awaiting approval"
+          ? "Review submitted"
           : reviewStatus === "rejected"
             ? "Review not approved"
             : reviewStatus === "hidden"
               ? "Your review is hidden"
             : "";
-      const reviewAction = !isCustomItem && accountData?.customer?.email && order.status === "Delivered" && order.paymentStatus === "Paid"
+      const canReviewItem = !isCustomItem && accountData?.customer?.email && order.status === "Delivered" && order.paymentStatus === "Paid";
+      const reviewAction = canReviewItem
         ? review
           ? `<p class="order-review-status">${reviewMessage}</p>
              <button class="account-text-button" type="button" data-view-review="${escapeHtml(productId)}">View your review</button>
@@ -155,7 +156,7 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
              </div>`
           : `<button class="account-text-button" type="button" data-write-review="${escapeHtml(productId)}">Write a review</button>
              <form class="account-review-form" data-review-form data-order-id="${escapeHtml(order.id)}" data-product-id="${escapeHtml(productId)}" hidden>
-               <fieldset class="review-rating"><legend>Your rating</legend><div>${[1, 2, 3, 4, 5].map((rating) => `<label aria-label="${rating} stars"><input type="radio" name="rating" value="${rating}" required><span aria-hidden="true">★</span></label>`).join("")}</div></fieldset>
+               <fieldset class="review-rating"><legend>Your rating</legend><div>${[5, 4, 3, 2, 1].map((rating) => `<label aria-label="${rating} stars"><input type="radio" name="rating" value="${rating}" required><span aria-hidden="true">★</span></label>`).join("")}</div></fieldset>
                <label class="field">Review title <span class="optional">(optional)</span><input name="reviewTitle" maxlength="120" placeholder="A few words about your purchase"></label>
                <label class="field">Your review <span class="optional">(optional)</span><textarea name="reviewText" rows="3" maxlength="1000" placeholder="Tell us what you think of your handmade piece."></textarea></label>
                <label class="field">Product photos <span class="optional">(up to 5)</span><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple data-review-photos></label>
@@ -163,7 +164,10 @@ function renderOrderDetails(order, reviewStatuses = [], scroll = true) {
                <button class="button button-primary" type="submit">Submit review <span>→</span></button>
              </form>`
         : "";
-      return `<div class="detail-item-row"><div class="detail-item">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Quantity ${item.qty} · ${price(item.unitPrice)} each</small>${item.customDescription ? `<small class="order-custom-description">${escapeHtml(item.customDescription)}</small>` : ""}</div><strong>${price(item.qty * item.unitPrice)}</strong></div>${reviewAction}</div>`;
+      const itemDetails = canReviewItem
+        ? `<div class="detail-item detail-item-review-product">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Delivered · Quantity ${item.qty}</small></div></div>`
+        : `<div class="detail-item">${item.image ? `<img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}">` : ""}<div><strong>${escapeHtml(item.name)}</strong><small>Quantity ${item.qty} · ${price(item.unitPrice)} each</small>${item.customDescription ? `<small class="order-custom-description">${escapeHtml(item.customDescription)}</small>` : ""}</div><strong>${price(item.qty * item.unitPrice)}</strong></div>`;
+      return `<div class="detail-item-row${canReviewItem ? " detail-item-review" : ""}">${itemDetails}${reviewAction}</div>`;
     }).join("")}</div>
     <div class="order-detail-totals"><p>Subtotal <strong>${price(order.subtotal)}</strong></p><p>Shipping <strong>${price(order.shipping)}</strong></p>${order.discount ? `<p>Discount <strong>−${price(order.discount)}</strong></p>` : ""}<p class="grand-total">Total <strong>${price(order.total)}</strong></p></div>
     <div class="order-detail-address"><h4>Delivery address</h4><p>${escapeHtml(order.name)} · ${escapeHtml(order.phone)}<br>${escapeHtml(order.address)}, ${escapeHtml(order.city)} ${escapeHtml(order.pin)}</p><p>${escapeHtml(order.paymentMethod)} · ${escapeHtml(order.paymentStatus)}</p></div>
@@ -592,7 +596,7 @@ document.querySelector("#account-dashboard").addEventListener("submit", async (e
         request(`/api/account/orders/${encodeURIComponent(orderId)}/reviews`)
       ]);
       renderOrderDetails(order, reviews, false);
-      showMessage("Review submitted – Awaiting approval");
+      showMessage("Your review has been submitted.");
     } catch (error) {
       showMessage(error.message, true);
       reviewForm.dataset.submitting = "false";

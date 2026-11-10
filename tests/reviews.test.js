@@ -112,6 +112,7 @@ test("review submission uses the verified order, checkout identity, and trusted 
   assert.equal(database.inserted[0][3], order.customer_email);
   assert.equal(database.inserted[0][4], order.id);
   assert.equal(database.inserted[0][5], order.name);
+  assert.equal(database.inserted[0][6], 5);
   assert.equal(database.inserted[0][7], "Beautiful work");
   assert.equal(review.customerName, order.name);
   assert.equal(database.insertedPhotos.length, 1);

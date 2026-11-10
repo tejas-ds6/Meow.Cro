@@ -189,7 +189,7 @@ function displayReviews(reviews) {
   }
   reviewList.innerHTML = reviews.map((review) => `
     <article class="account-card admin-review-card">
-      <header class="admin-review-header"><div><p class="eyebrow">${escapeHtml(review.status)}</p><h4>${escapeHtml(review.customerName)}</h4></div><span class="status-pill">${escapeHtml(`${review.rating}/5`)} ★</span></header>
+      <header class="admin-review-header"><div><p class="eyebrow">${escapeHtml(review.status)}</p><h4>${escapeHtml(review.customerName)}</h4></div><span class="admin-review-rating" role="img" aria-label="${Number(review.rating)} out of 5 stars"><span class="admin-review-rating-stars" aria-hidden="true">${"★".repeat(Number(review.rating))}<span class="admin-review-rating-empty">${"★".repeat(5 - Number(review.rating))}</span></span><strong>${escapeHtml(`${review.rating}/5`)}</strong></span></header>
       ${review.reviewTitle ? `<h5>${escapeHtml(review.reviewTitle)}</h5>` : ""}
       ${review.reviewText ? `<p class="admin-review-copy">${escapeHtml(review.reviewText)}</p>` : ""}
       <div class="admin-review-meta"><span>Product: ${escapeHtml(review.productName || review.productId)}</span><span>Order: ${escapeHtml(review.orderNumber || review.orderId)}</span><span>${escapeHtml(new Date(review.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }))}</span></div>
