@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
-const quoteLifetimeDays = 14;
+const quoteLifetimeDays = 7;
 
 function hashToken(token) {
   return createHash("sha256").update(token).digest("hex");
@@ -16,7 +16,7 @@ function safeRequest(row) {
     details: row.details,
     budget: row.budget === null ? null : Number(row.budget),
     neededBy: row.needed_by,
-    hasReferencePhoto: Boolean(row.reference_photo),
+    hasReferencePhoto: row.has_reference_photo ?? Boolean(row.reference_photo),
     referencePhotoType: row.reference_photo_type,
     status: row.status,
     quotedAmount: row.quoted_amount === null ? null : Number(row.quoted_amount),
@@ -46,7 +46,10 @@ export function createCustomOrderService({ database }) {
 
   async function listAdminRequests() {
     const result = await database.query(
-      "SELECT * FROM custom_order_requests ORDER BY created_at DESC LIMIT 500"
+      `SELECT id, name, email, whatsapp, idea, details, budget, needed_by,
+        (reference_photo IS NOT NULL) AS has_reference_photo, reference_photo_type,
+        status, quoted_amount, admin_note, quote_expires_at, created_at, updated_at
+       FROM custom_order_requests ORDER BY created_at DESC LIMIT 500`
     );
     return result.rows.map(safeRequest);
   }
@@ -110,7 +113,8 @@ export function createCustomOrderService({ database }) {
     const result = await database.query(
       `SELECT id, name, email, whatsapp, idea, details, quoted_amount, admin_note, quote_expires_at
        FROM custom_order_requests
-       WHERE quote_token_hash = $1 AND status = 'offered' AND quote_expires_at > NOW()`,
+       WHERE quote_token_hash = $1 AND status = 'offered'
+         AND quote_expires_at > NOW()`,
       [hashToken(token)]
     );
     const row = result.rows[0];

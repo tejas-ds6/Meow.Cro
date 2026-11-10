@@ -84,7 +84,7 @@ test("custom quote starts a server-priced payment and saves an order linked to i
   const checkout = await service.startCustomOrderPayment(
     token,
     { address: "1 Studio Lane", city: "Pune", pin: "411001", note: "Call on arrival", total: 1 },
-    "customer-uuid",
+    { customer_id: "customer-uuid", customer_email: "buyer@example.test" },
     async (order) => {
       razorpayOrder = order;
       return { orderId: "rzp_custom_order", amount: 145000, currency: "INR" };
@@ -110,4 +110,64 @@ test("custom quote starts a server-priced payment and saves an order linked to i
   assert.ok(queries.some((sql) => sql.includes("(custom_order_id IS NULL OR payment_status = 'Paid')")));
   orders.get(customRequest.id).payment_status = "Paid";
   assert.equal((await service.listCustomerOrdersByEmail("buyer@example.test")).length, 1);
+});
+
+test("custom order checkout doesn't attach another customer's signed-in account", async () => {
+  const token = "customer-quote-link";
+  const customRequest = {
+    id: "request-uuid",
+    name: "Custom buyer",
+    email: "buyer@example.test",
+    whatsapp: "9876543210",
+    idea: "Custom crochet item",
+    details: "",
+    quoted_amount: "100.00",
+    quote_token_hash: createHash("sha256").update(token).digest("hex"),
+    status: "offered",
+    quote_expires_at: new Date(Date.now() + 60_000)
+  };
+  let insertedOrder;
+  const database = {
+    async query() {
+      return { rows: [] };
+    },
+    async connect() {
+      return {
+        async query(sql, values = []) {
+          if (["BEGIN", "COMMIT", "ROLLBACK"].includes(sql)) return { rows: [] };
+          if (sql.includes("FROM custom_order_requests")) return { rows: [customRequest] };
+          if (sql.includes("SELECT * FROM orders WHERE custom_order_id")) return { rows: [] };
+          if (sql.includes("INSERT INTO orders")) {
+            insertedOrder = values;
+            return { rows: [{
+              id: values[0], number: values[1], customer_id: values[2], customer_email: values[3],
+              name: values[4], phone: values[5], address: values[6], city: values[7], pin: values[8],
+              note: values[9], items: JSON.parse(values[10]), subtotal: values[11], shipping: values[12],
+              discount: values[13], total: values[14], payment_method: values[15], payment_status: "Pending",
+              razorpay_order_id: values[16], custom_order_id: values[17], order_status: "Order Placed",
+              created_at: new Date(), updated_at: new Date()
+            }] };
+          }
+          if (sql.includes("INSERT INTO order_status_events")) return { rows: [] };
+          throw new Error(`Unexpected SQL: ${sql}`);
+        },
+        release() {}
+      };
+    }
+  };
+  const service = createAccountService({
+    database,
+    emailService: { send: async () => ({ id: "email_test" }) },
+    environment: {}
+  });
+
+  await service.startCustomOrderPayment(
+    token,
+    { address: "1 Studio Lane", city: "Pune", pin: "411001" },
+    { customer_id: "someone-else", customer_email: "other@example.test" },
+    async () => ({ orderId: "rzp_custom_order", amount: 10000, currency: "INR" })
+  );
+
+  assert.equal(insertedOrder[2], null);
+  assert.equal(insertedOrder[3], "buyer@example.test");
 });

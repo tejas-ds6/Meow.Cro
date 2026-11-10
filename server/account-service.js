@@ -518,7 +518,7 @@ export function createAccountService({ database, emailService, environment }) {
     }
   }
 
-  async function startCustomOrderPayment(token, checkout, customerId, createPaymentOrder) {
+  async function startCustomOrderPayment(token, checkout, customerSession, createPaymentOrder) {
     const client = await database.connect();
     try {
       await client.query("BEGIN");
@@ -539,6 +539,10 @@ export function createAccountService({ database, emailService, environment }) {
         [request.id]
       );
       const existingOrder = existingOrderResult.rows[0];
+      const customerId = customerSession?.customer_id &&
+        normalizeEmail(customerSession.customer_email) === normalizeEmail(request.email)
+        ? customerSession.customer_id
+        : null;
       const total = Number(request.quoted_amount);
       const order = {
         number: existingOrder?.number || createOrderNumber(),

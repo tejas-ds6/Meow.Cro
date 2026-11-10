@@ -46,6 +46,15 @@ function showMessage(value, isError = false) {
   message.classList.toggle("message-success", !isError);
 }
 
+function showListError(container, label, error) {
+  const card = document.createElement("div");
+  card.className = "account-card account-empty";
+  const text = document.createElement("p");
+  text.textContent = `${label}: ${error.message}`;
+  card.append(text);
+  container.replaceChildren(card);
+}
+
 function setDashboardView(view) {
   dashboardView = view;
   const showingReviews = view === "reviews";
@@ -230,16 +239,28 @@ async function loadReviews(status = "pending") {
 }
 
 async function loadOrders() {
-  const [ordersResult, customOrdersResult, activeTab] = await Promise.all([
-    request("/api/admin/orders"),
-    request("/api/admin/custom-orders"),
-    Promise.resolve(document.querySelector(".review-tab.is-active")?.dataset.reviewTab || "pending")
-  ]);
+  const ordersResult = await request("/api/admin/orders");
   displayOrders(ordersResult.orders);
-  displayCustomOrders(customOrdersResult.requests);
-  await loadReviews(activeTab);
   loginPanel.hidden = true;
   dashboard.hidden = false;
+
+  const activeTab = document.querySelector(".review-tab.is-active")?.dataset.reviewTab || "pending";
+  const [customResult, reviewResult] = await Promise.allSettled([
+    request("/api/admin/custom-orders"),
+    loadReviews(activeTab)
+  ]);
+  if (customResult.status === "fulfilled") {
+    displayCustomOrders(customResult.value.requests);
+  } else {
+    showListError(customOrderList, "Custom requests couldn't be loaded", customResult.reason);
+    showMessage("Orders loaded, but custom requests couldn't be loaded. Refresh and try again.", true);
+  }
+  if (reviewResult.status === "rejected") {
+    showListError(reviewList, "Reviews couldn't be loaded", reviewResult.reason);
+    if (customResult.status === "fulfilled") {
+      showMessage("Orders loaded, but customer reviews couldn't be loaded. Refresh and try again.", true);
+    }
+  }
 }
 
 document.querySelector("#admin-login-form").addEventListener("submit", async (event) => {

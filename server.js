@@ -814,7 +814,7 @@ async function removeReviewPhotoFiles(references) {
         notificationSent = await sendCustomOrderOfferEmail(
           result.request,
           emailService,
-          `${getPublicSiteOrigin()}/custom-order.html?token=${encodeURIComponent(result.token)}`
+          `${getPublicSiteOrigin()}/custom-order/${encodeURIComponent(result.token)}`
         );
       } catch (error) {
         console.error("Custom order offer was saved, but its customer email could not be sent:", error);
@@ -1135,7 +1135,7 @@ app.post("/api/custom-orders/payment", express.json({ limit: "32kb" }), asyncRou
     const result = await accountService.startCustomOrderPayment(
       values.token,
       values,
-      req.accountSession?.role === "customer" ? req.accountSession.customer_id : null,
+      req.accountSession?.role === "customer" ? req.accountSession : null,
       (order) => paymentService.createOrder(order)
     );
     if (!result) {
@@ -1303,6 +1303,15 @@ app.get("/sitemap.xml", (req, res) => {
     .map((location) => `  <url>\n    <loc>${location}</loc>\n  </url>`)
     .join("\n");
   res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${locations}\n</urlset>\n`);
+});
+
+app.get("/custom-order/:token", (req, res) => {
+  const token = req.params.token;
+  if (!/^[\da-z_-]{40,50}$/i.test(token)) {
+    res.redirect(302, "/custom-order.html");
+    return;
+  }
+  res.redirect(302, `/custom-order.html?token=${encodeURIComponent(token)}`);
 });
 
 app.get("/llms.txt", asyncRoute(async (req, res) => {

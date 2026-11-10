@@ -44,7 +44,7 @@ function showOffer(offer) {
   document.querySelector("#custom-order-note").textContent = offer.adminNote ? `Studio note: ${offer.adminNote}` : "";
   document.querySelector("#custom-order-price").textContent = formatPrice(offer.quotedAmount);
   content.hidden = false;
-  showMessage(`Offer sent to ${offer.email}. The price shown is the total for your custom piece.`);
+  showMessage(`Offer prepared for ${offer.email}. Pay within 7 days to confirm your custom order.`);
 }
 
 form.addEventListener("submit", async (event) => {

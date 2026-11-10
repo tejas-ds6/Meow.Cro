@@ -120,7 +120,7 @@ export async function sendCustomOrderOfferEmail(request, emailService, paymentLi
     request.adminNote ? `A note from the studio: ${request.adminNote}` : "",
     "",
     "Review the offer, add your delivery address, and pay securely to confirm your order.",
-    `This offer expires on ${new Date(request.quoteExpiresAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}.`,
+    `This offer is valid for 7 days and expires on ${new Date(request.quoteExpiresAt).toLocaleDateString("en-IN", { dateStyle: "medium" })}.`,
     "",
     "Made slowly, with love,",
     "Meow.Cro Studio"

@@ -38,6 +38,30 @@ test("custom order requests are stored with reference photos and safe admin fiel
   assert.equal("reference_photo" in saved, false);
 });
 
+test("admin custom request listing excludes photo bytes but retains photo availability", async () => {
+  let sql;
+  const database = {
+    async query(statement) {
+      sql = statement;
+      return {
+        rows: [{
+          id: "request-id", name: "Buyer", email: "buyer@example.test", whatsapp: "9876543210",
+          idea: "A small flower", details: "", budget: null, needed_by: null,
+          has_reference_photo: true, reference_photo_type: "image/png",
+          status: "pending", quoted_amount: null, admin_note: "", quote_expires_at: null,
+          created_at: new Date(), updated_at: new Date()
+        }]
+      };
+    }
+  };
+  const [request] = await createCustomOrderService({ database }).listAdminRequests();
+
+  assert.match(sql, /reference_photo IS NOT NULL/);
+  assert.doesNotMatch(sql, /SELECT \*/);
+  assert.equal(request.hasReferencePhoto, true);
+  assert.equal("reference_photo" in request, false);
+});
+
 test("custom order offers use expiring hashed tokens and can be reissued", async () => {
   const queries = [];
   const database = {
@@ -75,6 +99,8 @@ test("custom order offers use expiring hashed tokens and can be reissued", async
   assert.equal(first.request.quotedAmount, 750);
   assert.equal(first.request.status, "offered");
   assert.ok(first.request.quoteExpiresAt > new Date());
+  assert.ok(first.request.quoteExpiresAt <= new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+  assert.ok(first.request.quoteExpiresAt >= new Date(Date.now() + 6 * 24 * 60 * 60 * 1000 + 23 * 60 * 60 * 1000));
   assert.match(queries[0].sql, /quote_token_hash = \$4/);
   assert.equal(queries[0].values[3], createHash("sha256").update(first.token).digest("hex"));
 
